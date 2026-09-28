@@ -16,9 +16,15 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function mediaURL(p) {
+  p = String(p || '');
+  if (!p || /^(https?:|data:|\/)/.test(p)) return p;
+  return '/media/' + p;
+}
+
 function ava(url, cls = '') {
   if (!url) return `<div class="ava ava-ph ${cls}">🥔</div>`;
-  return `<img class="ava ${cls}" src="${esc(url)}" loading="lazy" onerror="App.avaFail(this)">`;
+  return `<img class="ava ${cls}" src="${esc(mediaURL(url))}" loading="lazy" onerror="App.avaFail(this)">`;
 }
 App.avaFail = function (img) {
   const cls = img.className;
@@ -229,7 +235,7 @@ function renderTabbar(active) {
     if (t.plus) return `<button class="tab plus" data-tab="plus"><span class="ic">+</span><span>${t.label}</span></button>`;
     let inner = `<span class="ic">${t.ic}</span>`;
     if (t.id === 'profile' && App.me && App.me.avatar)
-      inner = `<img class="ava" src="${esc(App.me.avatar)}" onerror="App.avaFail(this)">`;
+      inner = `<img class="ava" src="${esc(mediaURL(App.me.avatar))}" onerror="App.avaFail(this)">`;
     return `<button class="tab${on}" data-tab="${t.id}">${inner}<span>${t.label}</span></button>`;
   }).join('');
   $$('.tab', bar).forEach(b => b.onclick = () => {
@@ -376,6 +382,7 @@ window.esc = esc; window.ava = ava; window.toast = toast;
 window.Theme = Theme;
 window.plural = plural; window.pluralWord = pluralWord;
 window.people = people; window.subs = subs; window.subsWord = subsWord;
+window.mediaURL = mediaURL;
 window.timeHM = timeHM; window.timeAgoShort = timeAgoShort; window.timeAgo = timeAgo;
 window.nfmt = nfmt; window.debounce = debounce;
 window.Overlay = Overlay; window.sheet = sheet; window.modal = modal;

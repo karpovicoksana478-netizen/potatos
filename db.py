@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS comments (
   video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   text TEXT NOT NULL,
+  media TEXT NOT NULL DEFAULT '',
+  parent_id INTEGER,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS follows (
@@ -136,13 +138,27 @@ CREATE INDEX IF NOT EXISTS idx_comments_video ON comments(video_id, id);
 """
 
 
+def _migrate():
+    """Добавляем новые колонки в уже существующие базы."""
+    have = {r["name"] for r in db().execute("PRAGMA table_info(comments)")}
+    for col, sql in (
+        ("parent_id", "ALTER TABLE comments ADD COLUMN parent_id INTEGER"),
+        ("media", "ALTER TABLE comments ADD COLUMN media TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in have:
+            db().execute(sql)
+    db().commit()
+
+
 def init():
     os.makedirs(os.path.join(MEDIA, "videos"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "images"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "avatars"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "thumbs"), exist_ok=True)
+    os.makedirs(os.path.join(MEDIA, "edited"), exist_ok=True)
     db().executescript(SCHEMA)
     db().commit()
+    _migrate()
 
 
 def now():

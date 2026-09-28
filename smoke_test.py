@@ -67,9 +67,17 @@ def main():
     check("save", c.post(f"/api/video/{vid}/save", headers=ha).json()["saved"] is True)
     check("repost", c.post(f"/api/video/{vid}/repost", headers=ha).json()["reposted"] is True)
     check("saved list", len(c.get("/api/saved", headers=ha).json()["items"]) == 1)
-    cm = c.post(f"/api/video/{vid}/comments", headers=ha, json={"text": "класс!"}).json()
+    cm = c.post(f"/api/video/{vid}/comments", headers=ha, data={"text": "класс!"}).json()
     check("comment", cm["text"] == "класс!")
     check("comments list", len(c.get(f"/api/video/{vid}/comments").json()["items"]) == 1)
+    cm2 = c.post(f"/api/video/{vid}/comments", headers=ha,
+                 data={"text": "и я!", "parent_id": str(cm["id"])},
+                 files={"file": ("cm.jpg", png(80), "image/jpeg")}).json()
+    check("comment reply", bool(cm2.get("parent")) and cm2["parent"]["id"] == cm["id"], cm2)
+    check("comment photo", cm2.get("media", "").startswith("images/"), cm2)
+    check("comment photo served", c.get("/media/" + cm2["media"]).status_code == 200)
+    items = c.get(f"/api/video/{vid}/comments").json()["items"]
+    check("comments list 2", len(items) == 2, items)
     check("view", c.post(f"/api/video/{vid}/view").status_code == 200)
 
     check("follow", c.post(f"/api/user/{U2}/follow", headers=ha).json()["followed"] is True)
@@ -83,6 +91,51 @@ def main():
     av = c.post("/api/me/avatar", headers=ha, files={"file": ("a.jpg", png(), "image/jpeg")}).json()
     check("avatar", av["user"]["avatar"].startswith("avatars/"))
     check("user videos", len(c.get(f"/api/user/{U1}/videos").json()["items"]) == 1)
+
+    # --- редактор: обрезка, склейка, публикация обработанного файла ---
+    import os
+    import subprocess
+    import tempfile
+
+    ff = None
+    try:
+        import imageio_ffmpeg
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        ff = None
+    tmp = tempfile.mkdtemp()
+    clip = os.path.join(tmp, "a.mp4")
+    if ff:
+        subprocess.run([ff, "-hide_banner", "-y", "-f", "lavfi", "-i",
+                        "testsrc=duration=2:size=320x240:rate=15",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", clip],
+                       capture_output=True, timeout=180)
+    if ff and os.path.isfile(clip) and os.path.getsize(clip) > 1000:
+        blob = open(clip, "rb").read()
+        tr = c.post("/api/edit/trim", headers=ha,
+                    files={"file": ("a.mp4", blob, "video/mp4")},
+                    data={"start": "0.5", "end": "1.5"}).json()
+        check("edit trim", tr.get("media", "").startswith("edited/"), tr)
+        cat = c.post("/api/edit/concat", headers=ha,
+                     files=[("files", ("a.mp4", blob, "video/mp4")),
+                            ("files", ("b.mp4", blob, "video/mp4"))]).json()
+        check("edit concat", cat.get("media", "").startswith("edited/"), cat)
+        up2 = c.post("/api/upload", headers=ha,
+                     files={"thumb": ("t.jpg", png(80), "image/jpeg")},
+                     data={"caption": "из редактора", "media": tr["media"]}).json()
+        check("upload edited media",
+              up2.get("kind") == "video" and up2.get("media") == tr["media"], up2)
+        check("edited media served", c.get("/media/" + tr["media"]).status_code == 200)
+        check("bad media path rejected",
+              c.post("/api/upload", headers=ha,
+                     data={"media": "edited/../potatos.db", "caption": "x"}).status_code == 400)
+        check("foreign media rejected",
+              c.post("/api/upload", headers=ha,
+                     data={"media": "videos/x.mp4", "caption": "x"}).status_code == 400)
+        check("no media no file rejected",
+              c.post("/api/upload", headers=ha, data={"caption": "x"}).status_code == 400)
+    else:
+        print("  SKIP edit tests (ffmpeg недоступен)")
 
     g = c.post("/api/chats", headers=ha, json={"type": "group", "title": "Клуб картошки",
                                                "description": "общаемся"}).json()

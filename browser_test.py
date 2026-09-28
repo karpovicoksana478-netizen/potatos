@@ -31,6 +31,11 @@ def wait(driver, css, timeout=12):
     return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, css)))
 
 
+def wait_hash(driver, h, timeout=15):
+    return WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return location.hash") == h)
+
+
 def shot(driver, name):
     import os
     os.makedirs(OUT, exist_ok=True)
@@ -116,15 +121,27 @@ def main():
 
         # комментарии
         driver.find_element(By.CSS_SELECTOR, ".post [data-comment]").click()
-        time.sleep(1)
+        wait(driver, ".sheet .cmt-input", 10)
         check("открылись комментарии", len(driver.find_elements(By.CSS_SELECTOR, ".sheet .cmt-input")) == 1)
         driver.find_element(By.CSS_SELECTOR, ".sheet .cmt-input input").send_keys("отлично!")
-        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt-input button").click()
-        time.sleep(1)
+        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt-input .csend").click()
+        wait(driver, ".sheet .cmt", 10)
         check("комментарий отправлен", len(driver.find_elements(By.CSS_SELECTOR, ".sheet .cmt")) >= 1)
+        # ответ на комментарий
+        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt [data-reply]").click()
+        wait(driver, ".sheet .cmt-chip", 10)
+        check("чип ответа показан", len(driver.find_elements(By.CSS_SELECTOR, ".sheet .cmt-chip")) == 1)
+        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt-input input").send_keys("и я!")
+        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt-input .csend").click()
+        wait(driver, ".sheet .cmt-quote", 10)
+        check("ответ отправлен", len(driver.find_elements(By.CSS_SELECTOR, ".sheet .cmt-quote")) == 1)
+        driver.find_element(By.CSS_SELECTOR, ".sheet .cmt .u b").click()
+        time.sleep(1.5)
+        check("профиль автора комментария открыт",
+              driver.execute_script("return location.hash").startswith("#/profile/"))
+        driver.get(BASE + "/#/home")
+        time.sleep(1.5)
         shot(driver, "04-comments")
-        driver.execute_script("Overlay.close()")
-        time.sleep(0.5)
 
         # профиль
         driver.find_element(By.CSS_SELECTOR, "#tabbar .tab[data-tab=profile]").click()
@@ -165,7 +182,7 @@ def main():
         check("модалка создания", len(driver.find_elements(By.CSS_SELECTOR, ".modal [data-title]")) == 1)
         driver.find_element(By.CSS_SELECTOR, ".modal [data-title]").send_keys("Тестовый клуб 🥔")
         driver.find_element(By.CSS_SELECTOR, ".modal [data-create]").click()
-        time.sleep(2)
+        wait(driver, ".convo-head", 12)
         check("группа создана и открыта",
               "Тестовый клуб" in driver.find_element(By.CSS_SELECTOR, ".convo-head").text)
         shot(driver, "09-group")
@@ -173,8 +190,13 @@ def main():
         # отправка сообщения
         driver.find_element(By.CSS_SELECTOR, "[data-input]").send_keys("привет из теста")
         driver.find_element(By.CSS_SELECTOR, "[data-send]").click()
-        time.sleep(1.2)
-        check("сообщение в чате", len(driver.find_elements(By.CSS_SELECTOR, ".msg.me")) == 1)
+        wait(driver, ".msg", 10)
+        time.sleep(0.4)
+        check("сообщение в чате", len(driver.find_elements(By.CSS_SELECTOR, ".msg.me")) == 1,
+              (len(driver.find_elements(By.CSS_SELECTOR, ".msg")),
+               driver.execute_script(
+                   "return [...document.querySelectorAll('.msg')].map(m=>m.className).join('|')"),
+               js_errs(driver)))
         shot(driver, "10-message")
 
         # стикеры
@@ -182,17 +204,17 @@ def main():
         time.sleep(0.5)
         check("панель стикеров", len(driver.find_elements(By.CSS_SELECTOR, ".stickers button")) >= 20)
         driver.find_elements(By.CSS_SELECTOR, ".stickers button")[0].click()
-        time.sleep(1)
+        wait(driver, ".msg .sticker", 10)
         check("стикер отправлен", len(driver.find_elements(By.CSS_SELECTOR, ".msg .sticker")) == 1)
         shot(driver, "11-sticker")
 
         # настройки группы: меню -> "Настроить" -> сохранение
         driver.find_element(By.CSS_SELECTOR, "[data-menu]").click()
-        time.sleep(1)
+        wait(driver, ".sheet [data-setup]", 10)
         check("меню чата", len(driver.find_elements(By.CSS_SELECTOR, ".sheet [data-setup]")) == 1)
         shot(driver, "14-chatmenu")
         driver.find_element(By.CSS_SELECTOR, ".sheet [data-setup]").click()
-        time.sleep(1.2)
+        wait(driver, ".page [data-title]", 10)
         check("экран настроек группы",
               len(driver.find_elements(By.CSS_SELECTOR, ".page [data-title]")) == 1)
         shot(driver, "15-chatsettings")
@@ -201,7 +223,8 @@ def main():
         dsc = driver.find_element(By.CSS_SELECTOR, ".page [data-desc]")
         dsc.clear(); dsc.send_keys("тестируем настройки")
         driver.find_element(By.CSS_SELECTOR, ".page [data-save]").click()
-        time.sleep(1.5)
+        WebDriverWait(driver, 12).until(
+            lambda d: "Клуб тестеров" in d.find_element(By.CSS_SELECTOR, ".convo-head").text)
         check("название группы изменилось",
               "Клуб тестеров" in driver.find_element(By.CSS_SELECTOR, ".convo-head").text)
 
@@ -212,21 +235,55 @@ def main():
         check("участник добавлен через API",
               c.post(f"/api/chats/{cid}/members", headers=h, json={"username": U2}).status_code == 200)
         driver.find_element(By.CSS_SELECTOR, "[data-menu]").click()
-        time.sleep(1.8)
+        WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".sheet [data-u]")))
+        time.sleep(0.6)
         rows = driver.find_elements(By.CSS_SELECTOR, ".sheet [data-u]")
         check("список участников", len(rows) == 2, len(rows))
+        WebDriverWait(driver, 10).until(EC.element_to_be_clickable(rows[1]))
         rows[1].click()
-        time.sleep(1)
+        wait(driver, ".sheet [data-promote]", 10)
         check("панель действий участника",
               len(driver.find_elements(By.CSS_SELECTOR, ".sheet [data-promote]")) == 1)
         shot(driver, "16-member")
         driver.find_element(By.CSS_SELECTOR, ".sheet [data-promote]").click()
-        time.sleep(1.8)
+        WebDriverWait(driver, 12).until(
+            lambda d: "админ" in d.find_element(By.CSS_SELECTOR, ".sheet [data-members]").text)
         check("администратор назначен",
               "админ" in driver.find_element(By.CSS_SELECTOR, ".sheet [data-members]").text)
         shot(driver, "17-admin")
         driver.execute_script("Overlay.close()")
         time.sleep(0.5)
+
+        # редактор фото: выбрать файл -> кадрирование -> публикация
+        import os as _os
+        import tempfile as _tf
+        edjpg = _os.path.join(_tf.gettempdir(), "potatos-ed.jpg")
+        Image.new("RGB", (900, 1600), (120, 180, 255)).save(edjpg, "JPEG")
+        driver.get(BASE + "/#/plus")
+        time.sleep(1.2)
+        driver.find_element(By.CSS_SELECTOR, "[data-m=edit]").click()
+        time.sleep(0.4)
+        check("вкладка редактора открыта",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-pane=edit]:not([hidden])")) == 1)
+        driver.execute_script("var i=document.querySelector('#f-edit'); i.hidden=false;")
+        driver.find_element(By.CSS_SELECTOR, "#f-edit").send_keys(edjpg)
+        wait(driver, ".modal .ed-stage", 10)
+        check("окно кадрирования", len(driver.find_elements(By.CSS_SELECTOR, ".modal .ed-stage")) == 1)
+        driver.find_element(By.CSS_SELECTOR, '.modal [data-r="0.5625"]').click()
+        time.sleep(0.5)
+        shot(driver, "21-editor")
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-ok]").click()
+        wait(driver, "[data-preview]:not([hidden]) img.preview", 10)
+        check("кадр применился",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
+        driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("кадрировано в редакторе")
+        driver.execute_script("document.querySelector('[data-publish]').scrollIntoView({block:'center'})")
+        time.sleep(0.8)
+        driver.find_element(By.CSS_SELECTOR, "[data-publish]").click()
+        wait_hash(driver, "#/home", 25)
+        check("обрезанное фото опубликовано",
+              driver.execute_script("return location.hash") == "#/home")
 
         # эфир: камера -> запись -> публикация (видео!)
         driver.get(BASE + "/#/plus")
@@ -244,7 +301,7 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("мой первый эфир")
         driver.find_element(By.CSS_SELECTOR, "[data-sound]").send_keys("живой звук")
         driver.find_element(By.CSS_SELECTOR, "[data-publish]").click()
-        time.sleep(6)
+        wait_hash(driver, "#/home", 30)
         check("эфир опубликован", driver.execute_script("return location.hash") == "#/home")
         vids = driver.find_elements(By.CSS_SELECTOR, ".post video")
         check("в ленте есть видео", len(vids) >= 1, len(vids))

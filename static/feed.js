@@ -21,7 +21,9 @@ function videoThumb(file) {
   return new Promise(resolve => {
     const v = document.createElement('video');
     v.preload = 'metadata'; v.muted = true; v.playsInline = true;
-    const url = URL.createObjectURL(file);
+    const remote = typeof file === 'string';
+    const url = remote ? file : URL.createObjectURL(file);
+    const cleanup = () => { if (!remote) URL.revokeObjectURL(url); };
     v.src = url;
     const done = () => {
       try {
@@ -29,13 +31,13 @@ function videoThumb(file) {
         const w = c.width = Math.min(360, v.videoWidth || 360);
         c.height = Math.round(w * ((v.videoHeight || 16) / (v.videoWidth || 9)));
         c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-        c.toBlob(b => { URL.revokeObjectURL(url); resolve(b); }, 'image/jpeg', 0.75);
-      } catch (e) { URL.revokeObjectURL(url); resolve(null); }
+        c.toBlob(b => { cleanup(); resolve(b); }, 'image/jpeg', 0.75);
+      } catch (e) { cleanup(); resolve(null); }
     };
     v.onloadeddata = () => { v.currentTime = Math.min(0.4, (v.duration || 1) / 3); };
     v.onseeked = done;
-    v.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-    setTimeout(() => resolve(null), 6000);
+    v.onerror = () => { cleanup(); resolve(null); };
+    setTimeout(() => { cleanup(); resolve(null); }, 6000);
   });
 }
 
@@ -45,18 +47,54 @@ async function openComments(videoId, onCount) {
     <div class="loader" data-load><div class="spin"></div></div>
     <div data-list></div>`);
   const list = $('[data-list]', body);
-  const render = items => {
-    if (!items.length) { list.innerHTML = `<div class="empty"><div class="ic">💬</div><div>Пока нет комментариев.<br>Будьте первым!</div></div>`; return; }
-    list.innerHTML = items.map(c => `
-      <div class="cmt">
-        <div data-prof="${esc(c.username)}" style="cursor:pointer">${ava(c.avatar, 'sm')}</div>
-        <div class="b">
-          <div class="u"><b>@${esc(c.username)}</b><span>${timeAgo(c.created_at)}</span></div>
-          <div class="tx">${esc(c.text)}</div>
-        </div>
-      </div>`).join('');
-    $$('[data-prof]', list).forEach(el => el.onclick = () => { Overlay.close(); navigate('#/profile/' + el.dataset.prof); });
+  let reply = null;   // {id, username, text}
+  let file = null;    // File с фото
+
+  const cmtHTML = c => `
+    <div class="cmt" data-id="${c.id}">
+      <div class="cmt-ava" data-prof="${esc(c.username)}">${ava(c.avatar, 'sm')}</div>
+      <div class="b">
+        <div class="u"><b data-prof="${esc(c.username)}">@${esc(c.username)}</b><span>${timeAgo(c.created_at)}</span></div>
+        ${c.parent ? `<div class="cmt-quote" data-qprof="${esc(c.parent.username)}">
+            <b>@${esc(c.parent.username)}</b><i>${esc((c.parent.text || '').slice(0, 120))}</i></div>` : ''}
+        ${c.media ? `<img class="cmt-img" src="${esc(mediaURL(c.media))}" alt="">` : ''}
+        ${c.text ? `<div class="tx">${esc(c.text)}</div>` : ''}
+        <div class="cmt-act"><button data-reply data-ruid="${c.id}" data-ruser="${esc(c.username)}"
+          data-rtext="${esc((c.text || '').slice(0, 120))}">Ответить</button></div>
+      </div>
+    </div>`;
+
+  const openPhoto = src => {
+    const n = document.createElement('div');
+    n.className = 'photo-view';
+    n.innerHTML = `<img src="${esc(src)}" alt="">`;
+    n.onclick = () => n.remove();
+    body.appendChild(n);
+    requestAnimationFrame(() => n.classList.add('on'));
   };
+
+  const bind = root => {
+    $$('[data-prof]', root).forEach(el => el.onclick = () => { Overlay.close(); navigate('#/profile/' + el.dataset.prof); });
+    $$('[data-qprof]', root).forEach(el => el.onclick = () => { Overlay.close(); navigate('#/profile/' + el.dataset.qprof); });
+    $$('.cmt-img', root).forEach(im => im.onclick = () => openPhoto(im.src));
+    $$('[data-reply]', root).forEach(btn => btn.onclick = () => {
+      reply = { id: +btn.dataset.ruid, username: btn.dataset.ruser, text: btn.dataset.rtext };
+      paintChips();
+      const inp = $('input', input);
+      inp.focus();
+      inp.placeholder = 'Ответ @' + reply.username;
+    });
+  };
+
+  const render = items => {
+    if (!items.length) {
+      list.innerHTML = `<div class="empty"><div class="ic">💬</div><div>Пока нет комментариев.<br>Будьте первым!</div></div>`;
+      return;
+    }
+    list.innerHTML = items.map(cmtHTML).join('');
+    bind(list);
+  };
+
   try {
     const d = await api(`/api/video/${videoId}/comments`);
     const ld = $('[data-load]', body);
@@ -67,30 +105,76 @@ async function openComments(videoId, onCount) {
     if (ld) ld.remove();
   }
 
+  /* поле ввода: ответ, фото, текст */
   const input = document.createElement('div');
   input.className = 'cmt-input';
-  input.innerHTML = `<input placeholder="Комментировать..." maxlength="1000"><button>➤</button>`;
+  input.innerHTML = `
+    <div class="cmt-chips" data-chips hidden></div>
+    <div class="cmt-row">
+      <button class="cbtn" data-attach title="Отправить фото">🖼️</button>
+      <input placeholder="Комментировать..." maxlength="1000">
+      <button class="csend">➤</button>
+    </div>`;
   body.appendChild(input);
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file'; fileInput.accept = 'image/*'; fileInput.hidden = true;
+  body.appendChild(fileInput);
+  $('[data-attach]', input).onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    const f = fileInput.files[0];
+    fileInput.value = '';
+    if (!f) return;
+    if (!f.type.startsWith('image/')) { toast('В комментарии можно отправить фото'); return; }
+    if (f.size > 10 * 1024 * 1024) { toast('Фото слишком большое (до 10 МБ)'); return; }
+    file = f;
+    paintChips();
+  };
+
+  const paintChips = () => {
+    const box = $('[data-chips]', input);
+    if (!reply && !file) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.innerHTML = `
+      ${reply ? `<div class="cmt-chip"><b>↩ Ответ @${esc(reply.username)}</b>
+        <span>${esc(reply.text)}</span><button class="x" data-xr>×</button></div>` : ''}
+      ${file ? `<div class="cmt-chip"><img class="thumb" src="${URL.createObjectURL(file)}" alt="">
+        <span>${esc(file.name.slice(0, 28))}</span><button class="x" data-xf>×</button></div>` : ''}`;
+    const xr = $('[data-xr]', box);
+    xr && (xr.onclick = () => {
+      reply = null;
+      $('input', input).placeholder = 'Комментировать...';
+      paintChips();
+    });
+    const xf = $('[data-xf]', box);
+    xf && (xf.onclick = () => { file = null; paintChips(); });
+  };
+
   const send = async () => {
     const t = $('input', input).value.trim();
-    if (!t) return;
+    if (!t && !file) return;
+    const fd = new FormData();
+    fd.append('text', t);
+    if (reply) fd.append('parent_id', String(reply.id));
+    if (file) fd.append('file', file, file.name);
     try {
-      const d = await api(`/api/video/${videoId}/comments`, { method: 'POST', body: { text: t } });
+      const d = await api(`/api/video/${videoId}/comments`, { method: 'POST', body: fd });
       d.created_at = Math.floor(Date.now() / 1000);
       $('input', input).value = '';
+      $('input', input).placeholder = 'Комментировать...';
+      reply = null; file = null;
+      paintChips();
       if ($('.empty', list)) list.innerHTML = '';
-      const wrap = document.createElement('div');
-      wrap.className = 'cmt';
-      wrap.innerHTML = `<div>${ava(d.avatar, 'sm')}</div><div class="b">
-        <div class="u"><b>@${esc(d.username)}</b><span>сейчас</span></div>
-        <div class="tx">${esc(d.text)}</div></div>`;
-      list.appendChild(wrap);
-      list.parentElement.scrollTop = list.parentElement.scrollHeight;
+      list.insertAdjacentHTML('beforeend', cmtHTML(d));
+      bind(list);
+      const scroller = list.parentElement;
+      scroller.scrollTop = scroller.scrollHeight;
       onCount && onCount();
     } catch (e) { }
   };
-  $('button', input).onclick = send;
-  $('input', input).onkeydown = e => { if (e.key === 'Enter') send(); };
+  $('.csend', input).onclick = send;
+  const txt = $('input', input);
+  txt.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); send(); } };
 }
 
 /* ---------------- feed component ---------------- */
@@ -418,11 +502,268 @@ views.home = async function (screen, r) {
   });
 };
 
+/* ---------------- редактор: обрезка фото ---------------- */
+function photoEditor(files, done) {
+  let idx = 0;
+  const out = new Array(files.length);
+  const m = modal(`
+    <div class="ed-head"><b data-title>Обрезка фото</b><span class="muted" data-pos></span></div>
+    <div class="ed-stage" data-stage><img data-img alt=""></div>
+    <div class="ed-ratios">
+      <button data-r="1" class="on">1:1</button>
+      <button data-r="0.5625">9:16</button>
+      <button data-r="1.7778">16:9</button>
+      <button data-r="0.8">4:5</button>
+      <button data-r="0">Ориг.</button>
+    </div>
+    <div class="ed-hint">Тяните фото, колесо мыши или щипок — масштаб</div>
+    <div class="row" style="gap:10px;margin-top:14px">
+      <button class="btn ghost" data-cancel>Отмена</button>
+      <button class="btn" data-ok>Готово</button>
+    </div>`);
+
+  const stage = $('[data-stage]', m), img = $('[data-img]', m);
+  const okBtn = $('[data-ok]', m);
+  let ratio = 1, natW = 1, natH = 1, cover = 1, scale = 1, dx = 0, dy = 0;
+
+  function stageSize() {
+    const maxW = Math.min(330, (m.clientWidth || 330) - 44);
+    const maxH = 300;
+    const r = ratio || (natW / natH) || 1;
+    let w = maxW, h = w / r;
+    if (h > maxH) { h = maxH; w = h * r; }
+    return { w: Math.max(60, Math.round(w)), h: Math.max(60, Math.round(h)) };
+  }
+  function fit(reset) {
+    const s = stageSize();
+    cover = Math.max(s.w / natW, s.h / natH);
+    if (reset) { scale = 1; dx = 0; dy = 0; }
+    apply();
+  }
+  function apply() {
+    const s = stageSize();
+    stage.style.width = s.w + 'px';
+    stage.style.height = s.h + 'px';
+    const bw = natW * cover * scale, bh = natH * cover * scale;
+    const mx = Math.max(0, (bw - s.w) / 2), my = Math.max(0, (bh - s.h) / 2);
+    dx = Math.max(-mx, Math.min(mx, dx));
+    dy = Math.max(-my, Math.min(my, dy));
+    img.style.width = (natW * cover) + 'px';
+    img.style.height = (natH * cover) + 'px';
+    img.style.transform = `translate(-50%,-50%) translate(${dx}px,${dy}px) scale(${scale})`;
+  }
+  function load() {
+    $$('.ed-ratios button', m).forEach(b => b.classList.toggle('on',
+      (b.dataset.r === '0' ? ratio === 0 : Math.abs(+b.dataset.r - ratio) < 0.01)));
+    $('[data-pos]', m).textContent = (idx + 1) + ' / ' + files.length;
+    okBtn.textContent = idx === files.length - 1 ? 'Готово' : 'Далее →';
+    if (img.src) URL.revokeObjectURL(img.src);
+    img.src = URL.createObjectURL(files[idx]);
+    img.onload = () => { natW = img.naturalWidth || 1; natH = img.naturalHeight || 1; fit(true); };
+  }
+
+  $$('.ed-ratios button', m).forEach(b => b.onclick = () => { ratio = +b.dataset.r; fit(true); });
+  $('[data-cancel]', m).onclick = () => Overlay.close();
+
+  okBtn.onclick = () => {
+    const s = stageSize();
+    const per = cover * scale;
+    const dispW = natW * per, dispH = natH * per;
+    const left = s.w / 2 + dx - dispW / 2;
+    const top = s.h / 2 + dy - dispH / 2;
+    let sw = s.w / per, sh = s.h / per;
+    let sx = Math.max(0, Math.min(natW - sw, -left / per));
+    let sy = Math.max(0, Math.min(natH - sh, -top / per));
+    sw = Math.min(sw, natW); sh = Math.min(sh, natH);
+    const k = Math.min(1, 2048 / Math.max(sw, sh));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(sw * k));
+    cv.height = Math.max(1, Math.round(sh * k));
+    cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    cv.toBlob(blob => {
+      const name = (files[idx].name || 'photo.jpg').replace(/\.[^.]+$/, '') + '.jpg';
+      out[idx] = new File([blob], name, { type: 'image/jpeg' });
+      idx++;
+      if (idx >= files.length) { Overlay.close(); done(out.filter(Boolean)); }
+      else load();
+    }, 'image/jpeg', 0.92);
+  };
+
+  /* перетаскивание и масштаб */
+  const pts = new Map();
+  let pinch = 0;
+  const dist = () => {
+    const a = [...pts.values()];
+    return a.length < 2 ? 0 : Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+  };
+  stage.style.touchAction = 'none';
+  stage.addEventListener('pointerdown', e => {
+    stage.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    pinch = dist();
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size >= 2) {
+      const d = dist();
+      if (pinch > 0 && d > 0) { scale = Math.max(1, Math.min(7, scale * (d / pinch))); pinch = d; }
+    } else {
+      dx += e.clientX - prev.x;
+      dy += e.clientY - prev.y;
+    }
+    apply();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+    stage.addEventListener(ev, e => { pts.delete(e.pointerId); pinch = dist(); }));
+  stage.addEventListener('wheel', e => {
+    e.preventDefault();
+    scale = Math.max(1, Math.min(7, scale * (e.deltaY < 0 ? 1.08 : 0.92)));
+    apply();
+  }, { passive: false });
+
+  load();
+}
+
+/* ---------------- редактор: обрезка и склейка видео ---------------- */
+function videoEditor(files, done) {
+  if (files.length === 1) trimEditor(files[0], done);
+  else concatEditor(files, done);
+}
+
+function trimEditor(src, done) {
+  const url = URL.createObjectURL(src);
+  const m = modal(`
+    <b>Обрезка видео</b>
+    <video class="ed-video" data-v src="${url}" controls playsinline muted></video>
+    <label class="lbl">Начало — <b data-s0>0.0</b> сек</label>
+    <input type="range" class="ed-range" data-s min="0" max="1" step="0.05" value="0">
+    <label class="lbl">Конец — <b data-s1>0.0</b> сек</label>
+    <input type="range" class="ed-range" data-e min="0" max="1" step="0.05" value="1">
+    <div class="ed-hint">В итоге получится <b data-len>—</b></div>
+    <div class="row" style="gap:10px;margin-top:16px">
+      <button class="btn ghost" data-cancel>Отмена</button>
+      <button class="btn" data-ok>✂️ Обрезать</button>
+    </div>
+    <div class="ed-proc" data-proc hidden><div class="spin"></div><span>Обрабатываем видео…</span></div>`);
+
+  const v = $('[data-v]', m), s0 = $('[data-s]', m), s1 = $('[data-e]', m);
+  let dur = 0;
+  const n = x => (Math.round(x * 10) / 10).toFixed(1);
+  function paint() {
+    const a = +s0.value, b = +s1.value;
+    $('[data-s0]', m).textContent = n(a);
+    $('[data-s1]', m).textContent = n(b);
+    $('[data-len]', m).textContent = n(Math.max(0, b - a)) + ' сек';
+  }
+  v.onloadedmetadata = () => {
+    dur = v.duration || 0;
+    s0.max = s1.max = dur;
+    s1.value = dur;
+    paint();
+  };
+  const seek = () => { try { v.currentTime = +s0.value; } catch (e) { } };
+  s0.oninput = () => {
+    if (+s0.value > +s1.value - 0.2) s0.value = Math.max(0, +s1.value - 0.2);
+    paint(); seek();
+  };
+  s1.oninput = () => {
+    if (+s1.value < +s0.value + 0.2) s1.value = Math.min(dur, +s0.value + 0.2);
+    paint();
+    try { v.currentTime = +s1.value; } catch (e) { }
+  };
+  v.ontimeupdate = () => { if (v.currentTime > +s1.value) v.pause(); };
+
+  $('[data-cancel]', m).onclick = () => { URL.revokeObjectURL(url); Overlay.close(); };
+  $('[data-ok]', m).onclick = async () => {
+    const btn = $('[data-ok]', m);
+    btn.disabled = true;
+    $('[data-proc]', m).hidden = false;
+    try {
+      const fd = new FormData();
+      fd.append('file', src, src.name || 'video.mp4');
+      fd.append('start', String(+s0.value));
+      fd.append('end', String(+s1.value));
+      const d = await api('/api/edit/trim', { method: 'POST', body: fd });
+      URL.revokeObjectURL(url);
+      Overlay.close();
+      done(d.media);
+    } catch (e) {
+      btn.disabled = false;
+      $('[data-proc]', m).hidden = true;
+    }
+  };
+}
+
+function concatEditor(files0, done) {
+  let list = files0.slice();
+  const m = modal(`
+    <b>Склейка видео</b>
+    <div class="ed-list" data-list></div>
+    <label class="btn ghost sm" for="f-more" style="display:block;text-align:center;margin-top:10px">＋ Добавить видео</label>
+    <input id="f-more" type="file" accept="video/*" multiple hidden>
+    <div class="ed-hint">Клип склеятся в том порядке, в котором они идут сверху вниз.</div>
+    <div class="row" style="gap:10px;margin-top:14px">
+      <button class="btn ghost" data-cancel>Отмена</button>
+      <button class="btn" data-ok>✂️ Склеить (${list.length})</button>
+    </div>
+    <div class="ed-proc" data-proc hidden><div class="spin"></div><span>Склеиваем видео…</span></div>`);
+
+  function paint() {
+    $('[data-list]', m).innerHTML = list.map((f, i) => `
+      <div class="ed-item">
+        <span class="n">${i + 1}</span>
+        <span class="nm">${esc((f.name || 'видео').slice(0, 26))}</span>
+        <button data-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button data-down="${i}" ${i === list.length - 1 ? 'disabled' : ''}>↓</button>
+        <button data-rm="${i}">✕</button>
+      </div>`).join('');
+    $('[data-ok]', m).textContent = '✂️ Склеить (' + list.length + ')';
+    $$('[data-up]', m).forEach(b => b.onclick = () => {
+      const i = +b.dataset.up; [list[i - 1], list[i]] = [list[i], list[i - 1]]; paint();
+    });
+    $$('[data-down]', m).forEach(b => b.onclick = () => {
+      const i = +b.dataset.down; [list[i + 1], list[i]] = [list[i], list[i + 1]]; paint();
+    });
+    $$('[data-rm]', m).forEach(b => b.onclick = () => {
+      list.splice(+b.dataset.rm, 1);
+      if (!list.length) { Overlay.close(); return; }
+      paint();
+    });
+  }
+  paint();
+
+  $('#f-more', m).onchange = e => {
+    [...e.target.files].forEach(f => list.push(f));
+    e.target.value = '';
+    paint();
+  };
+  $('[data-cancel]', m).onclick = () => Overlay.close();
+  $('[data-ok]', m).onclick = async () => {
+    if (list.length < 2) { toast('Нужно минимум два видео'); return; }
+    const btn = $('[data-ok]', m);
+    btn.disabled = true;
+    $('[data-proc]', m).hidden = false;
+    try {
+      const fd = new FormData();
+      list.forEach((f, i) => fd.append('files', f, f.name || ('v' + i + '.mp4')));
+      const d = await api('/api/edit/concat', { method: 'POST', body: fd });
+      Overlay.close();
+      done(d.media);
+    } catch (e) {
+      btn.disabled = false;
+      $('[data-proc]', m).hidden = true;
+    }
+  };
+}
+
 /* ---------------- views: plus / upload ---------------- */
 views.plus = async function (screen) {
   if (!requireAuth()) return;
   let mode = 'video';
   let file = null, thumbBlob = null, previewURL = null;
+  let editedMedia = '', extraFiles = [];
   let recorder = null, chunks = [], recStream = null, recTimer = null, liveBlob = null;
 
   screen.innerHTML = `
@@ -431,6 +772,7 @@ views.plus = async function (screen) {
     <div class="up-tabs">
       <button class="up-tab" data-m="photo"><span class="ic">🖼</span>Фото</button>
       <button class="up-tab on" data-m="video"><span class="ic">🎬</span>Видео</button>
+      <button class="up-tab" data-m="edit"><span class="ic">✂️</span>Редактор</button>
       <button class="up-tab" data-m="live"><span class="ic">📡</span>Эфир</button>
     </div>
 
@@ -450,6 +792,19 @@ views.plus = async function (screen) {
         <span class="muted" style="font-size:13px">MP4 / WebM, до 400 МБ</span>
       </label>
       <input id="f-video" type="file" accept="video/*" hidden>
+    </div>
+
+    <div data-pane="edit" hidden>
+      <label class="drop" for="f-edit">
+        <span class="ic">✂️</span>
+        <b>Выбрать фото или видео</b>
+        <span class="muted" style="font-size:13px">Обрезка, кадрирование, склейка</span>
+      </label>
+      <input id="f-edit" type="file" accept="image/*,video/*" multiple hidden>
+      <div class="inline-note" style="margin-top:14px">
+        Фото обрезается по кадру (1:1, 9:16, 16:9, 4:5), видео — по времени,
+        а если выбрать два и больше видео — они склеятся в одно ролика.
+      </div>
     </div>
 
     <div data-pane="live" hidden>
@@ -507,6 +862,7 @@ views.plus = async function (screen) {
 
   function clearFile() {
     file = null; thumbBlob = null; liveBlob = null;
+    editedMedia = ''; extraFiles = [];
     if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
     holder.innerHTML = ''; previewBox.hidden = true;
   }
@@ -516,6 +872,7 @@ views.plus = async function (screen) {
     if (!f) return;
     file = f;
     liveBlob = null;
+    editedMedia = '';
     if (previewURL) URL.revokeObjectURL(previewURL);
     previewURL = URL.createObjectURL(f);
     if (f.type.startsWith('video/')) {
@@ -529,8 +886,39 @@ views.plus = async function (screen) {
     previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
+  async function showEdited(media) {
+    if (!media) return;
+    file = null; extraFiles = [];
+    editedMedia = media;
+    liveBlob = null;
+    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
+    const url = mediaURL(media);
+    holder.innerHTML = `<video class="preview" src="${url}" controls playsinline muted></video>`;
+    thumbBlob = await videoThumb(url);
+    previewBox.hidden = false;
+    previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   $('#f-photo', screen).onchange = e => showFile(e.target.files[0]);
   $('#f-video', screen).onchange = e => showFile(e.target.files[0]);
+
+  $('#f-edit', screen).onchange = e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    const vids = files.filter(f => f.type.startsWith('video/'));
+    if (vids.length) {
+      if (files.length > vids.length) toast('В редактор попадут только видео');
+      videoEditor(vids, showEdited);
+    } else {
+      photoEditor(files, async results => {
+        if (results.length === 1) { await showFile(results[0]); return; }
+        extraFiles = results.slice(1);
+        await showFile(results[0]);
+        toast('Обработано фото: ' + results.length + ' — опубликуются как отдельные посты');
+      });
+    }
+  };
 
   /* ---- камера / эфир ---- */
   const cam = $('[data-cam]', screen);
@@ -608,23 +996,31 @@ views.plus = async function (screen) {
 
   /* ---- публикация ---- */
   $('[data-publish]', screen).onclick = async () => {
-    if (!file) { toast('Сначала выберите фото или видео'); return; }
     const caption = $('[data-caption]', screen).value.trim();
     const sound = $('[data-sound]', screen).value.trim();
+    const jobs = [];
+    if (editedMedia) jobs.push({ media: editedMedia });
+    if (file) jobs.push({ file });
+    extraFiles.forEach(f => jobs.push({ file: f }));
+    if (!jobs.length) { toast('Сначала выберите фото или видео'); return; }
     const btn = $('[data-publish]', screen);
     const prog = $('[data-progress]', screen);
     btn.disabled = true; prog.style.display = 'block';
-    const fd = new FormData();
-    fd.append('file', file, file.name || 'media');
-    if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
-    fd.append('caption', caption);
-    fd.append('sound', sound);
-    if (mode === 'live') fd.append('kind', 'live');
     try {
-      const d = await uploadWithProgress(fd, p => {
-        $('[data-pct]', screen).textContent = Math.round(p * 100) + '%';
-        $('[data-bar]', screen).style.width = Math.round(p * 100) + '%';
-      });
+      for (let i = 0; i < jobs.length; i++) {
+        const fd = new FormData();
+        if (jobs[i].media) fd.append('media', jobs[i].media);
+        else fd.append('file', jobs[i].file, jobs[i].file.name || 'media');
+        if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
+        fd.append('caption', caption);
+        fd.append('sound', sound);
+        if (mode === 'live') fd.append('kind', 'live');
+        await uploadWithProgress(fd, p => {
+          const pct = jobs.length > 1 ? (i + p) / jobs.length : p;
+          $('[data-pct]', screen).textContent = Math.round(pct * 100) + '%';
+          $('[data-bar]', screen).style.width = Math.round(pct * 100) + '%';
+        });
+      }
       toast('Опубликовано! 🥔');
       clearFile(); stopCam();
       $('[data-caption]', screen).value = '';

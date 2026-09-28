@@ -8,6 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from . import auth, db, hub
 from .chats import router as chats_router
+from .edit import router as edit_router
 from .users import router as users_router
 from .videos import router as videos_router
 
@@ -19,6 +20,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(users_router)
 app.include_router(videos_router)
 app.include_router(chats_router)
+app.include_router(edit_router)
 
 STATIC = os.path.join(db.BASE, "static")
 

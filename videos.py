@@ -44,33 +44,51 @@ def video_payload(v: dict, me) -> dict:
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), thumb: UploadFile = File(None),
+async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
                  caption: str = Form(""), sound: str = Form(""), kind: str = Form(""),
+                 media: str = Form(""),
                  user=Depends(auth.current_user)):
-    data = await file.read()
-    if len(data) > MAX_UPLOAD:
-        raise HTTPException(413, "Файл слишком большой (макс. 400 МБ)")
-    if not data:
-        raise HTTPException(400, "Пустой файл")
-
-    ext = _ext(file.filename)
-    requested = (kind or "").strip()
-    if ext in IMAGE_EXT:
-        folder, ext, kind = "images", IMAGE_EXT[ext], "photo"
-    elif ext in VIDEO_EXT:
-        folder, ext, kind = "videos", VIDEO_EXT[ext], "video"
-    elif (file.content_type or "").startswith("image/"):
-        folder, ext, kind = "images", ".jpg", "photo"
-    elif (file.content_type or "").startswith("video/"):
-        folder, ext, kind = "videos", ".mp4", "video"
-    else:
-        raise HTTPException(400, "Нужен файл видео или фото")
-    if requested == "live" and folder == "videos":
-        kind = "live"
-
-    media = auth.save_file(data, folder, ext)
-
     thumb_url = ""
+    requested = (kind or "").strip()
+
+    if media:
+        # файл уже обработан редактором и лежит на сервере — перелинковываем пост
+        media = media.strip()
+        name = media[len("edited/"):] if media.startswith("edited/") else ""
+        if not name or "/" in name or "\\" in name or ".." in name:
+            raise HTTPException(400, "Ожидался файл из редактора")
+        if not os.path.isfile(os.path.join(db.MEDIA, "edited", name)):
+            raise HTTPException(400, "Обработанный файл не найден — обработайте его заново")
+        media = "edited/" + name
+        ext = os.path.splitext(name)[1].lower()
+        folder, kind = ("images", "photo") if ext in IMAGE_EXT else ("videos", "video")
+        if requested == "live" and folder == "videos":
+            kind = "live"
+        media_path = media
+    else:
+        if file is None or not file.filename:
+            raise HTTPException(400, "Нужен файл видео или фото")
+        data = await file.read()
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, "Файл слишком большой (макс. 400 МБ)")
+        if not data:
+            raise HTTPException(400, "Пустой файл")
+
+        ext = _ext(file.filename)
+        if ext in IMAGE_EXT:
+            folder, ext, kind = "images", IMAGE_EXT[ext], "photo"
+        elif ext in VIDEO_EXT:
+            folder, ext, kind = "videos", VIDEO_EXT[ext], "video"
+        elif (file.content_type or "").startswith("image/"):
+            folder, ext, kind = "images", ".jpg", "photo"
+        elif (file.content_type or "").startswith("video/"):
+            folder, ext, kind = "videos", ".mp4", "video"
+        else:
+            raise HTTPException(400, "Нужен файл видео или фото")
+        if requested == "live" and folder == "videos":
+            kind = "live"
+        media_path = auth.save_file(data, folder, ext)
+
     if thumb is not None:
         tdata = await thumb.read()
         if tdata:
@@ -78,7 +96,7 @@ async def upload(file: UploadFile = File(...), thumb: UploadFile = File(None),
 
     vid = db.run(
         "INSERT INTO videos (user_id, kind, media, thumb, caption, sound, created_at) VALUES (?,?,?,?,?,?,?)",
-        (user["id"], kind, media, thumb_url, caption.strip()[:500], sound.strip()[:120], db.now()))
+        (user["id"], kind, media_path, thumb_url, caption.strip()[:500], sound.strip()[:120], db.now()))
     v = db.one("SELECT * FROM videos WHERE id=?", (vid,))
     return video_payload(v, user)
 
@@ -157,20 +175,58 @@ def comments(vid: int, user=Depends(auth.guest_or_user)):
     data = db.rows(
         "SELECT c.*, u.username, u.nickname, u.avatar FROM comments c JOIN users u ON u.id=c.user_id "
         "WHERE c.video_id=? ORDER BY c.id ASC LIMIT 500", (vid,))
+    ids = {c["parent_id"] for c in data if c["parent_id"]}
+    parents = {}
+    if ids:
+        ph = ",".join("?" * len(ids))
+        for p in db.rows(
+            "SELECT c.id, c.text, c.media, u.username, u.nickname, u.avatar "
+            "FROM comments c JOIN users u ON u.id=c.user_id WHERE c.id IN (" + ph + ")", tuple(ids)):
+            parents[p["id"]] = p
+    for c in data:
+        p = parents.get(c["parent_id"])
+        if p:
+            c["parent"] = p
+        else:
+            c["parent"] = None
     return {"items": data}
 
 
 @router.post("/video/{vid}/comments")
-def add_comment(vid: int, body: dict, user=Depends(auth.current_user)):
-    text = (body.get("text") or "").strip()
-    if not text:
+async def add_comment(vid: int,
+                      text: str = Form(""), parent_id: int = Form(0),
+                      file: UploadFile = File(None),
+                      user=Depends(auth.current_user)):
+    text = (text or "").strip()
+    media = ""
+    if file is not None and file.filename:
+        data = await file.read()
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Фото слишком большое (макс. 10 МБ)")
+        if not (file.content_type or "").startswith("image/"):
+            raise HTTPException(400, "В комментарии можно отправить только фото")
+        ext = ".png" if file.content_type == "image/png" else ".jpg"
+        media = auth.save_file(data, "images", ext)
+    if not text and not media:
         raise HTTPException(400, "Пустой комментарий")
     if not db.one("SELECT 1 x FROM videos WHERE id=?", (vid,)):
         raise HTTPException(404, "Не найдено")
-    cid = db.run("INSERT INTO comments (video_id, user_id, text, created_at) VALUES (?,?,?,?)",
-                 (vid, user["id"], text[:1000], db.now()))
+
+    parent = None
+    if parent_id:
+        parent = db.one(
+            "SELECT c.id, c.text, c.media, u.username, u.nickname, u.avatar "
+            "FROM comments c JOIN users u ON u.id=c.user_id "
+            "WHERE c.id=? AND c.video_id=?", (parent_id, vid))
+        if not parent:
+            raise HTTPException(404, "Комментарий для ответа не найден")
+
+    cid = db.run("INSERT INTO comments (video_id, user_id, text, media, parent_id, created_at) "
+                 "VALUES (?,?,?,?,?,?)",
+                 (vid, user["id"], text[:1000], media, parent["id"] if parent else None, db.now()))
     return {"id": cid, "username": user["username"], "nickname": user["nickname"],
-            "avatar": user["avatar"], "text": text[:1000]}
+            "avatar": user["avatar"], "text": text[:1000], "media": media,
+            "parent": parent}
 
 
 @router.delete("/video/{vid}")

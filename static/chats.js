@@ -645,12 +645,13 @@ function chatMenu(chat) {
 views.chatsettings = async function (screen, r) {
   if (!requireAuth()) return;
   const id = +r.args[0];
+  const back = () => history.length > 1 ? history.back() : navigate('#/chat/' + id);
   let chat = Chats.find(id);
   if (!chat) {
     try { chat = await api('/api/chats/' + id); }
     catch (e) { navigate('#/chats'); return; }
   }
-  if (!chat.can_manage) { toast('Этот чат настраивает владелец или администратор'); navigate('#/chat/' + id); return; }
+  if (!chat.can_manage) { toast('Этот чат настраивает владелец или администратор'); back(); return; }
   const isOwner = chat.owner_id === App.me.id;
   const isChannel = chat.type === 'channel';
 
@@ -701,7 +702,8 @@ views.chatsettings = async function (screen, r) {
       <div style="height:34px"></div>
     </div>`;
 
-  $('[data-back]', screen).onclick = () => navigate('#/chat/' + id);
+  const backBtn = $('[data-back]', screen);
+  backBtn && (backBtn.onclick = back);
 
   const link = $('[data-link]', screen);
   link.textContent = location.origin + '/#/join/' + chat.link;
@@ -734,7 +736,7 @@ views.chatsettings = async function (screen, r) {
       const i = Chats.list.findIndex(x => x.id === id);
       if (i >= 0) Chats.list[i] = Object.assign(Chats.list[i], d);
       toast('Сохранено');
-      navigate('#/chat/' + id);
+      back();
     } catch (e) { }
   };
 
