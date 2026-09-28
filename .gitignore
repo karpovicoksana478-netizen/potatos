@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+
+# данные: база и загруженные файлы живут на сервере
+potatos.db
+potatos.db-shm
+potatos.db-wal
+media/
+
+# артефакты запуска и тестов
+server.log
+server.err
+shots/
+
+# окружение
+.venv/
+venv/
+.env

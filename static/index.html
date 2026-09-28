@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#08080c">
+<title>potatos — соцсеть</title>
+<meta name="description" content="potatos — анонимная соцсеть: видео, чаты, группы и каналы.">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>
+  try {
+    document.documentElement.dataset.theme =
+      localStorage.getItem('potatos_theme') === 'light' ? 'light' : 'dark';
+  } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+</script>
+<link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+<div id="app">
+  <main id="screen"></main>
+  <nav id="tabbar" hidden></nav>
+  <div id="overlay"></div>
+  <div id="toast"></div>
+</div>
+<script src="/static/app.js?v=4"></script>
+<script src="/static/feed.js?v=4"></script>
+<script src="/static/chats.js?v=4"></script>
+<script src="/static/profile.js?v=4"></script>
+<script>App.start();</script>
+</body>
+</html>

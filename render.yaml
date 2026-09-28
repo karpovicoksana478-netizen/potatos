@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: potatos
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn potatos.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: POTATOS_DATA
+        value: /data
+    disk:
+      name: potatos-data
+      mountPath: /data
+      sizeGB: 1
