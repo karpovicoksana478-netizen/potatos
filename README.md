@@ -162,7 +162,8 @@ python potatos/browser_test.py   # интерфейс в Edge (скриншот�
    — Render сам подхватит `render.yaml`.
    (Если Blueprint недоступен — **New + → Web Service**, заполни руками:
    Build: `pip install -r requirements.txt`,
-   Start: `uvicorn potatos.app:app --host 0.0.0.0 --port $PORT`,
+   Start: `python run.py` (не `uvicorn potatos.app:app` — на хостинге код
+   лежит в корне репозитория, а `run.py` подключает пакет под именем `potatos`),
    Health Check: `/api/health`,
    Env: `POTATOS_DATA=/opt/render/potatos-data`.)
 3. **Apply**. Через ~3–5 минут сайт будет на `potatos-xxxx.onrender.com`,
