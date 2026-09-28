@@ -139,44 +139,40 @@ python potatos/browser_test.py   # интерфейс в Edge (скриншот�
 Всё лежит в `potatos/potatos.db` (один файл) и папке `potatos/media`.
 Чтобы начать с чистого листа — удали эти два объекта, сервер создаст их заново.
 
-На хостинге путь задаётся переменной `POTATOS_DATA` (обычно это постоянный диск,
-смонтированный в `/data`) — локально она не нужна, всё создаётся рядом с кодом.
+На хостинге путь задаётся переменной `POTATOS_DATA` — локально она не нужна,
+всё создаётся рядом с кодом; на Render значение задано в `render.yaml`.
 
 ---
 
-## 🚀 Деплой на Render (бесплатно)
+## 🚀 Деплой на Render (бесплатно, без карты)
 
-Конфиг уже в репозитории — `render.yaml`. Данные (SQLite + загрузки) лежат на
-постоянном диске, поэтому ничего не теряется при перезапусках.
+Конфиг уже в репозитории — `render.yaml` (без `disk`: бесплатный план Render
+постоянные диски не поддерживает). База и загрузки лежат в
+`/opt/render/potatos-data`, но файловая система бесплатного тира **эфемерная**:
+при перезапуске/редеплое данные могут слететь. Нормальный вариант потом —
+белорусский VPS или платный тир Render с диском
+(`disk` + `POTATOS_DATA=/data`).
 
-**Шаг 1 — GitHub**
-
-```
-git init -b main
-git add -A
-git commit -m "potatos"
-```
-
-Создай пустой репозиторий на github.com и добавь удалённый адрес:
-
-```
-git remote add origin https://github.com/ТВ_ЮЗЕР/potatos.git
-git push -u origin main
-```
+**Шаг 1 — GitHub** (уже сделано: `github.com/karpovicoksana478-netizen/potatos`)
 
 **Шаг 2 — Render**
 
-1. [render.com](https://render.com) → **New + → Web Service** → подключи репозиторий.
-2. Render сам подхватит `render.yaml` (если нет — заполни руками):
-   - Build: `pip install -r requirements.txt`
-   - Start: `uvicorn potatos.app:app --host 0.0.0.0 --port $PORT`
-   - Health Check: `/api/health`
-3. В настройках сервиса оставь диск **1 GB** с монтированием `/data`
-   и переменную `POTATOS_DATA=/data` — там будут `potatos.db` и `media/`.
-4. **Create Web Service**. Через ~3 минуты сайт будет на
-   `potatos-xxxx.onrender.com`, и им можно пользоваться с любого устройства.
+1. [render.com](https://render.com) → регистрация через GitHub (карта не нужна).
+2. **New + → Blueprint** → выбери репозиторий `karpovicoksana478-netizen/potatos`
+   — Render сам подхватит `render.yaml`.
+   (Если Blueprint недоступен — **New + → Web Service**, заполни руками:
+   Build: `pip install -r requirements.txt`,
+   Start: `uvicorn potatos.app:app --host 0.0.0.0 --port $PORT`,
+   Health Check: `/api/health`,
+   Env: `POTATOS_DATA=/opt/render/potatos-data`.)
+3. **Apply**. Через ~3–5 минут сайт будет на `potatos-xxxx.onrender.com`,
+   и им можно пользоваться с любого устройства.
 
 Бесплатный тир засыпает после простоя: открой ссылку — сервис поднимется за ~30 секунд.
+
+**Заметка для Беларуси:** оплата/карты из РБ в зарубежных хостингах обычно не проходят.
+Постоянный вариант от ~26 BYN/мес — белорусский VPS (bcr.by, Hoster.by, CloudVPS.by,
+Login.by), оплата ЕРИП/белорусской картой, дата-центр в Минске.
 
 ---
 

@@ -8,8 +8,4 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: POTATOS_DATA
-        value: /data
-    disk:
-      name: potatos-data
-      mountPath: /data
-      sizeGB: 1
+        value: /opt/render/potatos-data
