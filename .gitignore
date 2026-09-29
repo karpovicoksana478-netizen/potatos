@@ -16,3 +16,6 @@ shots/
 .venv/
 venv/
 .env
+
+push.log
+push.err
