@@ -39,6 +39,7 @@ def register(body: dict):
         raise HTTPException(400, "Такой юзернейм занят")
     uid = db.run("INSERT INTO users (username, nickname, password, created_at) VALUES (?,?,?,?)",
                  (username, nickname, auth.hash_password(password), db.now()))
+    db.run("UPDATE users SET last_seen=? WHERE id=?", (db.now(), uid))
     token = auth.create_token(uid)
     user = db.one("SELECT * FROM users WHERE id=?", (uid,))
     return {"token": token, "user": auth.public_user(user)}
@@ -51,7 +52,11 @@ def login(body: dict):
     u = db.one("SELECT * FROM users WHERE username=?", (username,))
     if not u or not auth.verify_password(password, u["password"]):
         raise HTTPException(400, "Неверный юзернейм или пароль")
+    if db.banned(u):
+        raise HTTPException(403, "Аккаунт заблокирован администратором")
     token = auth.create_token(u["id"])
+    db.run("UPDATE users SET last_seen=? WHERE id=?", (db.now(), u["id"]))
+    u = db.one("SELECT * FROM users WHERE id=?", (u["id"],))
     return {"token": token, "user": auth.public_user(u)}
 
 

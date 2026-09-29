@@ -1,5 +1,6 @@
 """Тест реалтайм-доставки сообщений: python potatos/ws_test.py"""
 import json
+import os
 import random
 import sys
 import threading
@@ -8,8 +9,8 @@ import time
 import httpx
 import websocket
 
-BASE = "http://127.0.0.1:8000"
-WS = "ws://127.0.0.1:8000/ws"
+BASE = os.environ.get("POTATOS_BASE", "http://127.0.0.1:8000")
+WS = "ws" + BASE[len("http"):] + "/ws"
 
 
 def main():

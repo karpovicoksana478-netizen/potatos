@@ -111,7 +111,6 @@ views.chats = async function (screen) {
         <input data-q placeholder="Поиск людей, каналов и групп" autocapitalize="none">
         <button data-clearq style="color:var(--muted);font-size:17px" hidden>✕</button>
       </div>
-      <button class="back" data-new style="font-size:20px">＋</button>
     </div>
     <div data-results></div>
     <div data-listwrap>
@@ -196,50 +195,7 @@ views.chats = async function (screen) {
 
   q.oninput = doSearch;
   clear.onclick = () => { q.value = ''; doSearch(); q.focus(); };
-  $('[data-new]', screen).onclick = () => newChatModal();
 };
-
-function newChatModal() {
-  const m = modal(`
-    <h3>Создать</h3>
-    <div class="up-tabs" style="margin-top:14px">
-      <button class="up-tab on" data-t="group"><span class="ic">👥</span>Группа</button>
-      <button class="up-tab" data-t="channel"><span class="ic">📢</span>Канал</button>
-    </div>
-    <label class="lbl">Название</label>
-    <input class="field" data-title maxlength="60" placeholder="${'Например: Картопляный клуб'}">
-    <label class="lbl">Описание</label>
-    <input class="field" data-desc maxlength="300" placeholder="О чём этот чат">
-    <div style="height:18px"></div>
-    <div class="row" style="gap:10px">
-      <button class="btn ghost" data-cancel>Отмена</button>
-      <button class="btn" data-create>Создать</button>
-    </div>
-    <div class="inline-note" style="margin-top:14px">
-      <b>Группа</b> — писать могут все участники.<br>
-      <b>Канал</b> — публиковать можете только вы, подписчики читают.
-    </div>`);
-  let type = 'group';
-  $$('[data-t]', m).forEach(b => b.onclick = () => {
-    type = b.dataset.t;
-    $$('[data-t]', m).forEach(x => x.classList.toggle('on', x === b));
-  });
-  $('[data-cancel]', m).onclick = () => Overlay.close();
-  $('[data-create]', m).onclick = async () => {
-    const title = $('[data-title]', m).value.trim();
-    if (!title) { toast('Введите название'); return; }
-    try {
-      const c = await api('/api/chats', {
-        method: 'POST',
-        body: { type, title, description: $('[data-desc]', m).value.trim() }
-      });
-      Overlay.close();
-      await Chats.loadList();
-      toast('Создано!');
-      navigate('#/chat/' + c.id);
-    } catch (e) { }
-  };
-}
 
 /* ---------------- переписка ---------------- */
 const ChatView = {

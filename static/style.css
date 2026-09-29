@@ -110,8 +110,8 @@ textarea.field{resize:none;min-height:90px}
   border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(20,20,26,.55);
   backdrop-filter:blur(8px);font-size:17px}
 .feed-top .icon-btn{right:10px;top:calc(6px + env(safe-area-inset-top))}
-.rail{position:absolute;right:8px;bottom:96px;z-index:13;display:flex;flex-direction:column;gap:19px;align-items:center}
-.rail .ava-wrap{position:relative;margin-bottom:6px}
+.rail{position:absolute;right:8px;bottom:56px;z-index:13;display:flex;flex-direction:column;gap:13px;align-items:center}
+.rail .ava-wrap{position:relative;margin-bottom:4px}
 .rail .follow{position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);width:22px;height:22px;
   border-radius:50%;background:var(--like);color:#fff;display:flex;align-items:center;justify-content:center;
   font-size:15px;font-weight:700;line-height:1;border:2px solid #000}
@@ -376,9 +376,12 @@ html[data-theme=light] .stat{background:#fff}
 .feed-top .t.on:after{display:none}
 .rail .ava-wrap .ava{border:2.5px solid #fff;box-shadow:0 4px 16px rgba(0,0,0,.45)}
 .rail .follow{width:23px;height:23px;font-size:16px;border-width:2px;box-shadow:0 3px 8px rgba(0,0,0,.5)}
+.rail .del-badge{position:absolute;top:-7px;right:-9px;width:21px;height:21px;border-radius:50%;
+  background:rgba(255,59,92,.92);color:#fff;font-size:11px;display:flex;align-items:center;
+  justify-content:center;box-shadow:0 2px 7px rgba(0,0,0,.55);border:1.5px solid #fff}
 .act{gap:5px}
-.act .ico{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.15);
-  backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;font-size:22px;
+.act .ico{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.15);
+  backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;font-size:20px;
   border:1px solid rgba(255,255,255,.16);box-shadow:0 4px 14px rgba(0,0,0,.3);transition:.15s}
 .act .n{font-size:11.5px;font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.8)}
 .act.liked .ico{background:rgba(255,59,92,.25);border-color:rgba(255,59,92,.55)}
@@ -463,3 +466,68 @@ html[data-theme=light] .chip.adm{background:rgba(224,168,0,.16);color:#8a5a00}
 .ed-proc{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px;
   font-size:13.5px;color:var(--muted)}
 .ed-proc[hidden]{display:none}
+
+/* ---------- ТЕМА: фиолетовая ---------- */
+html[data-theme=purple]{
+  --bg:#120a20; --panel:#1a1030; --panel2:#241640; --panel3:#2f1d52;
+  --text:#f4eeff; --muted:#a496c6; --line:#3b2a60;
+  --accent:#b57bff; --accent-d:#9a5cf0; --like:#ff6ad5; --live:#ff4dc4;
+  --chrome:rgba(18,10,32,.94);
+}
+html[data-theme=purple] body{background:#0b0716}
+html[data-theme=purple] .ava-ph{background:linear-gradient(135deg,#e2b4ff,#8a4dff);color:#2b0a52}
+html[data-theme=purple] .link-box{color:#c9a7ff}
+html[data-theme=purple] .icon-btn{background:rgba(28,16,48,.62)}
+html[data-theme=purple] .toast{background:rgba(30,18,52,.97);border-color:#4a3480}
+html[data-theme=purple] .grid{background:var(--line)}
+html[data-theme=purple] .gcell{background:var(--panel3)}
+html[data-theme=purple] .stat{background:var(--panel)}
+html[data-theme=purple] .auth{background:radial-gradient(1000px 500px at 50% -10%,rgba(181,123,255,.3),transparent 60%),var(--bg)}
+html[data-theme=purple] .tab.plus .ic{background:linear-gradient(135deg,#b57bff,#ff6ad5);
+  color:#170026;box-shadow:0 4px 16px rgba(181,123,255,.42)}
+html[data-theme=purple] .fab{box-shadow:0 8px 24px rgba(181,123,255,.4)}
+html[data-theme=purple] .theme-card.on{border-color:var(--accent);background:rgba(181,123,255,.14)}
+html[data-theme=purple] .btn{color:#170026}
+html[data-theme=purple] .act.saved .ico{background:rgba(181,123,255,.24);border-color:rgba(181,123,255,.6)}
+html[data-theme=purple] .feed-top .t.on:after{background:var(--accent)}
+.theme-card .sw.purple{background:#170d2e}
+.theme-card .sw.purple:before{background:rgba(255,255,255,.4)}
+.theme-card .sw.purple:after{background:rgba(181,123,255,.55)}
+
+/* ---------- АДМИНКА ---------- */
+.admin-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.astat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 6px;text-align:center}
+.astat b{display:block;font-size:19px;font-weight:800}
+.astat span{font-size:11px;color:var(--muted)}
+.admin-row{display:flex;gap:11px;align-items:flex-start;padding:12px 4px;border-bottom:1px solid var(--line)}
+.admin-row .ar-ava{flex:none;cursor:pointer}
+.admin-row .ar-main{flex:1;min-width:0}
+.admin-row .ar-name{font-weight:700;font-size:14.5px;cursor:pointer}
+.admin-row .ar-meta{font-size:12.5px;margin-top:3px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.admin-row .ar-acts{flex:none;max-width:46%}
+.badge{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:999px;
+  letter-spacing:.2px;vertical-align:middle}
+.badge.adm{background:rgba(255,201,60,.18);color:var(--accent-d)}
+.badge.on{background:rgba(61,220,132,.16);color:var(--ok)}
+.badge.ban{background:rgba(255,59,92,.16);color:#ff6b81}
+.badge.ban.perm{background:rgba(255,59,92,.28);color:#fff}
+.badge.posts{background:rgba(255,149,0,.18);color:#ff9500}
+html[data-theme=light] .badge.adm{background:rgba(224,168,0,.16);color:#8a5a00}
+html[data-theme=light] .badge.on{background:rgba(20,160,90,.14);color:#12844a}
+html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
+
+/* ---------- КАРАНДАШ (рисование) ---------- */
+.draw-modal{position:fixed;inset:0;z-index:400;background:#0b0b10;display:flex;flex-direction:column}
+.draw-top{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top));background:rgba(0,0,0,.6)}
+.draw-stage{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:8px}
+.draw-stage canvas{max-width:100%;max-height:100%;touch-action:none;border-radius:12px;
+  background:repeating-conic-gradient(#1a1a22 0 25%,#141419 0 50%) 0 0/22px 22px;
+  box-shadow:0 6px 30px rgba(0,0,0,.5)}
+.draw-tools{display:flex;align-items:center;gap:12px;padding:12px;
+  padding-bottom:calc(12px + env(safe-area-inset-bottom));background:rgba(0,0,0,.7)}
+.draw-colors{display:flex;gap:8px;flex:1;flex-wrap:wrap}
+.draw-color{width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.35);
+  box-shadow:0 2px 6px rgba(0,0,0,.4);transition:.12s}
+.draw-color.on{border-color:#fff;transform:scale(1.18)}
+.draw-tools input[type=range]{width:110px;accent-color:var(--accent)}

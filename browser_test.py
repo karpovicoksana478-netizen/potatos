@@ -12,7 +12,7 @@ from selenium.webdriver.edge.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-BASE = "http://127.0.0.1:8000"
+BASE = __import__("os").environ.get("POTATOS_BASE", "http://127.0.0.1:8000")
 OUT = __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.abspath(__file__)), "shots")
 ok = 0
 
@@ -176,15 +176,15 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "[data-clearq]").click()
         time.sleep(0.6)
 
-        # создание группы
-        driver.find_element(By.CSS_SELECTOR, "[data-new]").click()
-        time.sleep(0.6)
-        check("модалка создания", len(driver.find_elements(By.CSS_SELECTOR, ".modal [data-title]")) == 1)
-        driver.find_element(By.CSS_SELECTOR, ".modal [data-title]").send_keys("Тестовый клуб 🥔")
-        driver.find_element(By.CSS_SELECTOR, ".modal [data-create]").click()
+        # группа: кнопки создания в интерфейсе убраны — создаём через API и открываем
+        g = c.post("/api/chats", headers=h, json={"type": "group", "title": "Тестовый клуб 🥔"}).json()
+        check("группа создана через API", g.get("type") == "group", g)
+        driver.get(BASE + f"/#/chat/{g['id']}")
         wait(driver, ".convo-head", 12)
-        check("группа создана и открыта",
+        check("группа открыта",
               "Тестовый клуб" in driver.find_element(By.CSS_SELECTOR, ".convo-head").text)
+        check("кнопки создания чатов убраны",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-new]")) == 0)
         shot(driver, "09-group")
 
         # отправка сообщения
@@ -255,34 +255,46 @@ def main():
         driver.execute_script("Overlay.close()")
         time.sleep(0.5)
 
-        # редактор фото: выбрать файл -> кадрирование -> публикация
+        # карандаш: фото -> рисуем -> публикуем (вместо старого редактора)
         import os as _os
         import tempfile as _tf
         edjpg = _os.path.join(_tf.gettempdir(), "potatos-ed.jpg")
         Image.new("RGB", (900, 1600), (120, 180, 255)).save(edjpg, "JPEG")
         driver.get(BASE + "/#/plus")
         time.sleep(1.2)
-        driver.find_element(By.CSS_SELECTOR, "[data-m=edit]").click()
-        time.sleep(0.4)
-        check("вкладка редактора открыта",
-              len(driver.find_elements(By.CSS_SELECTOR, "[data-pane=edit]:not([hidden])")) == 1)
-        driver.execute_script("var i=document.querySelector('#f-edit'); i.hidden=false;")
-        driver.find_element(By.CSS_SELECTOR, "#f-edit").send_keys(edjpg)
-        wait(driver, ".modal .ed-stage", 10)
-        check("окно кадрирования", len(driver.find_elements(By.CSS_SELECTOR, ".modal .ed-stage")) == 1)
-        driver.find_element(By.CSS_SELECTOR, '.modal [data-r="0.5625"]').click()
-        time.sleep(0.5)
-        shot(driver, "21-editor")
-        driver.find_element(By.CSS_SELECTOR, ".modal [data-ok]").click()
+        check("вкладка редактора убрана",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-m=edit]")) == 0)
+        driver.execute_script("var i=document.querySelector('#f-photo'); i.hidden=false;")
+        driver.find_element(By.CSS_SELECTOR, "#f-photo").send_keys(edjpg)
         wait(driver, "[data-preview]:not([hidden]) img.preview", 10)
-        check("кадр применился",
-              len(driver.find_elements(By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
-        driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("кадрировано в редакторе")
+        check("фото в превью", len(driver.find_elements(
+            By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
+        driver.find_element(By.CSS_SELECTOR, "[data-draw]").click()
+        wait(driver, ".draw-modal canvas", 10)
+        check("окно рисования", len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal canvas")) == 1)
+        check("палитра карандаша", len(driver.find_elements(By.CSS_SELECTOR, ".draw-color")) >= 6)
+        from selenium.webdriver.common.action_chains import ActionChains
+        cv = driver.find_element(By.CSS_SELECTOR, ".draw-modal canvas")
+        ActionChains(driver).move_to_element(cv).click_and_hold().move_by_offset(70, 110).release().perform()
+        time.sleep(0.5)
+        shot(driver, "21-draw")
+        px = driver.execute_script("""
+          const c = document.querySelector('.draw-modal canvas');
+          const d = c.getContext('2d').getImageData(Math.floor(c.width/2), Math.floor(c.height/2), 1, 1).data;
+          return [d[0], d[1], d[2], d[3]];
+        """)
+        check("линия карандашом на холсте", px[0] > 230 and px[1] > 230 and px[2] > 230, px)
+        driver.find_element(By.CSS_SELECTOR, ".draw-modal [data-ok]").click()
+        WebDriverWait(driver, 15).until(
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, ".draw-modal")) == 0)
+        check("окно рисования закрылось",
+              len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal")) == 0)
+        driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("нарисовано карандашом")
         driver.execute_script("document.querySelector('[data-publish]').scrollIntoView({block:'center'})")
         time.sleep(0.8)
         driver.find_element(By.CSS_SELECTOR, "[data-publish]").click()
         wait_hash(driver, "#/home", 25)
-        check("обрезанное фото опубликовано",
+        check("фото опубликовано",
               driver.execute_script("return location.hash") == "#/home")
 
         # эфир: камера -> запись -> публикация (видео!)
@@ -291,12 +303,15 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "[data-m=live]").click()
         time.sleep(0.5)
         driver.find_element(By.CSS_SELECTOR, "[data-camstart]").click()
-        time.sleep(2)                       # включили камеру
+        # ждём, пока камера реально включится
+        WebDriverWait(driver, 20).until(
+            lambda d: "Начать эфир" in d.find_element(By.CSS_SELECTOR, "[data-camstart]").text)
         driver.find_element(By.CSS_SELECTOR, "[data-camstart]").click()
-        time.sleep(2.5)                     # идёт запись эфира
+        WebDriverWait(driver, 20).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "[data-livebar]:not([hidden])") != [])
         check("идёт запись эфира", driver.find_elements(By.CSS_SELECTOR, "[data-livebar]:not([hidden])") != [])
         driver.find_element(By.CSS_SELECTOR, "[data-camstop]").click()
-        time.sleep(3)
+        wait(driver, "[data-preview]:not([hidden]) video", 25)
         check("превью эфира готово", driver.find_elements(By.CSS_SELECTOR, "[data-preview]:not([hidden]) video") != [])
         driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("мой первый эфир")
         driver.find_element(By.CSS_SELECTOR, "[data-sound]").send_keys("живой звук")
@@ -315,8 +330,8 @@ def main():
         time.sleep(1)
         check("шестерёнка ведёт в настройки",
               driver.execute_script("return location.hash") == "#/settings")
-        check("две темы на выбор",
-              len(driver.find_elements(By.CSS_SELECTOR, "[data-th]")) == 2)
+        check("три темы на выбор",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-th]")) == 3)
         shot(driver, "18-settings")
         driver.find_element(By.CSS_SELECTOR, "[data-th=light]").click()
         time.sleep(0.5)
@@ -332,12 +347,48 @@ def main():
         shot(driver, "19-feed-light")
         driver.get(BASE + "/#/settings")
         time.sleep(1)
+        driver.find_element(By.CSS_SELECTOR, "[data-th=purple]").click()
+        time.sleep(0.5)
+        check("фиолетовая тема включена",
+              driver.execute_script("return document.documentElement.dataset.theme") == "purple")
+        shot(driver, "22-settings-purple")
+        driver.get(BASE + "/#/home")
+        time.sleep(1.5)
+        check("фиолетовая лента отрисована",
+              len(driver.find_elements(By.CSS_SELECTOR, ".post")) >= 3)
+        shot(driver, "23-feed-purple")
+        driver.get(BASE + "/#/settings")
+        time.sleep(1)
         driver.find_element(By.CSS_SELECTOR, "[data-th=dark]").click()
         time.sleep(0.5)
         check("тёмная тема включена",
               driver.execute_script("return document.documentElement.dataset.theme") == "dark")
 
-        # чужой профиль из списка
+        # админка: вход аккаунтом администратора (данные из кода)
+        driver.execute_script("localStorage.removeItem('potatos_token');location.reload()")
+        time.sleep(2.5)
+        wait(driver, ".auth", 15)
+        driver.find_element(By.CSS_SELECTOR, "[name=username]").send_keys("dmitriy444")
+        driver.find_element(By.CSS_SELECTOR, "[name=password]").send_keys("19892012Burmalda")
+        driver.find_element(By.CSS_SELECTOR, "[data-go]").click()
+        wait(driver, "#tabbar .tab", 15)
+        time.sleep(1.5)
+        check("вход администратором",
+              driver.execute_script("return App.me && App.me.is_admin") is True)
+        check("пятая вкладка «Админка»",
+              len(driver.find_elements(By.CSS_SELECTOR, "#tabbar .tab")) == 5)
+        driver.get(BASE + "/#/admin")
+        wait(driver, ".admin-row", 15)
+        time.sleep(1.5)
+        check("список пользователей в админке",
+              len(driver.find_elements(By.CSS_SELECTOR, ".admin-row")) >= 2)
+        check("статистика админки",
+              all(b.strip() and b.strip() != "…" for b in
+                  [x.text for x in driver.find_elements(By.CSS_SELECTOR, ".astat b")]))
+        check("кнопки бана видны",
+              len(driver.find_elements(By.CSS_SELECTOR, ".admin-row [data-ban]")) >= 2)
+        shot(driver, "24-admin")
+
         driver.get(BASE + "/#/chats")
         time.sleep(1)
         check("нет JS-ошибок", not js_errs(driver), js_errs(driver))

@@ -198,7 +198,6 @@ function createFeed(root, opts = {}) {
         <span class="t ${st.tab === 'following' ? 'on' : ''}" data-tab="following">Подписки</span>
       </div>
       ${st.onBack ? `<button class="icon-btn" data-back style="left:10px;top:calc(6px + env(safe-area-inset-top));right:auto">←</button>` : ''}
-      <button class="icon-btn" data-mute title="Звук">🔇</button>
     </div>`;
 
   const feedEl = $('[data-feed]', root);
@@ -229,6 +228,8 @@ function createFeed(root, opts = {}) {
         : `<button class="follow" data-follow title="Подписаться">+</button>`);
     const chip = (v.mine || !App.me || v.followed) ? '' :
       `<button class="follow-chip" data-follow>Подписаться</button>`;
+    const adminDel = (App.me && App.me.is_admin && !v.mine)
+      ? `<button class="del-badge" data-del title="Удалить видео">🗑</button>` : '';
     return `
     <div class="post" data-id="${v.id}" data-i="${i}">
       ${mediaHTML}
@@ -241,6 +242,7 @@ function createFeed(root, opts = {}) {
         <div class="ava-wrap">
           <div data-openprof style="cursor:pointer">${ava(u.avatar)}</div>
           ${followUI}
+          ${adminDel}
         </div>
         <button class="act ${v.liked ? 'liked' : ''}" data-like title="Нравится">
           <span class="ico">${v.liked ? '❤️' : '🤍'}</span><span class="n" data-likes>${nfmt(v.likes)}</span>
@@ -250,9 +252,6 @@ function createFeed(root, opts = {}) {
         </button>
         <button class="act ${v.saved ? 'saved' : ''}" data-save title="Сохранить">
           <span class="ico">${v.saved ? '🔖' : '📑'}</span>
-        </button>
-        <button class="act" data-repost title="Поделиться">
-          <span class="ico">🔁</span><span class="n" data-rc>${nfmt(v.reposts)}</span>
         </button>
         <div class="disc">🎵</div>
       </div>
@@ -295,15 +294,16 @@ function createFeed(root, opts = {}) {
     const media = $('.media', p);
     let tapT = null;
 
-    const tapArea = media;
-    tapArea.addEventListener('click', () => {
+    // клик по всему посту (оверлеи .shade/.paused перехватывают события — раньше пауза «не срабатывала»)
+    p.addEventListener('click', e => {
+      if (e.target.closest('button, a, input, textarea, [data-openprof], .meta')) return;
+      if (media.tagName !== 'VIDEO') return;
       if (tapT) { clearTimeout(tapT); tapT = null; doLike(true); return; }
       tapT = setTimeout(() => {
         tapT = null;
-        if (media.tagName === 'VIDEO') {
-          if (media.paused) { media.play().catch(() => { }); $('.paused', p).classList.remove('show'); }
-          else { media.pause(); $('.paused', p).classList.add('show'); }
-        }
+        if (media.muted) media.muted = false;   // первый тап включает звук
+        if (media.paused) { media.play().catch(() => { }); $('.paused', p).classList.remove('show'); }
+        else { media.pause(); $('.paused', p).classList.add('show'); }
       }, 240);
     });
 
@@ -384,16 +384,18 @@ function createFeed(root, opts = {}) {
       }).catch(() => { });
     };
 
-    $('[data-repost]', p).onclick = e => {
+    const delBtn = $('[data-del]', p);
+    delBtn && (delBtn.onclick = e => {
       e.stopPropagation();
-      if (!App.me) return navigate('#/auth');
-      api(`/api/video/${v.id}/repost`, { method: 'POST' }).then(d => {
-        v.reposts = d.reposts;
-        $('[data-rc]', p).textContent = nfmt(v.reposts);
-        $('[data-repost]', p).classList.toggle('liked', d.reposted);
-        toast(d.reposted ? 'Опубликовано у вас в профиле' : 'Репост отменён');
-      }).catch(() => { });
-    };
+      confirmModal('Удалить это видео?', async () => {
+        try {
+          await api(`/api/video/${v.id}`, { method: 'DELETE' });
+          p.remove();
+          st.items = st.items.filter(x => x.id !== v.id);
+          toast('Видео удалено');
+        } catch (err) { }
+      }, 'Удалить');
+    });
 
     if (media.tagName === 'VIDEO') {
       const bar = $('.prog i', p);
@@ -416,8 +418,13 @@ function createFeed(root, opts = {}) {
     const v = st.items.find(x => x.id === id);
     const media = $('.media', p);
     if (media && media.tagName === 'VIDEO') {
-      media.muted = !FeedState.sound;
-      media.play().catch(() => { });
+      // звук включён сразу; если браузер не даёт автоплей со звуком —
+      // играем без звука, звук включится после первого касания
+      media.muted = false;
+      media.play().catch(() => {
+        media.muted = true;
+        media.play().catch(() => { });
+      });
       $('.paused', p).classList.remove('show');
     }
     if (v && !st.seen.has(id)) {
@@ -439,22 +446,6 @@ function createFeed(root, opts = {}) {
   $$('[data-tab]', root).forEach(el => el.onclick = () => setTab(el.dataset.tab));
   const backBtn = $('[data-back]', root);
   backBtn && (backBtn.onclick = () => { st.onBack ? st.onBack() : navigate('#/home'); });
-
-  const muteBtn = $('[data-mute]', root);
-  const paintMute = () => {
-    muteBtn.textContent = FeedState.sound ? '🔊' : '🔇';
-    $$('.media', feedEl).forEach(m => m.muted = !FeedState.sound);
-  };
-  muteBtn.onclick = () => {
-    FeedState.sound = !FeedState.sound;
-    paintMute();
-    if (st.active) {
-      const m = $('.media', st.active);
-      if (m) { m.muted = !FeedState.sound; if (FeedState.sound && m.paused) m.play().catch(() => { }); }
-    }
-    toast(FeedState.sound ? 'Звук включён' : 'Звук выключен');
-  };
-  paintMute();
 
   feedEl.addEventListener('scroll', debounce(() => {
     if (!st.more || st.loading) return;
@@ -485,7 +476,112 @@ function createFeed(root, opts = {}) {
   };
 }
 
-const FeedState = { sound: false };
+/* ---------------- карандаш: рисование поверх фото/видео ---------------- */
+function drawEditor(src, isVideo, cb) {
+  const modal = document.createElement('div');
+  modal.className = 'draw-modal';
+  modal.innerHTML = `
+    <div class="draw-top">
+      <button class="btn sm ghost" data-cancel>✕ Отмена</button>
+      <div class="row" style="gap:6px">
+        <button class="btn sm ghost" data-undo>↶ Назад</button>
+        <button class="btn sm ghost" data-wipe>🧽 Очистить</button>
+        <button class="btn sm" data-ok>✓ Готово</button>
+      </div>
+    </div>
+    <div class="draw-stage"><canvas data-canvas></canvas></div>
+    <div class="draw-tools">
+      <div class="draw-colors">
+        ${['#ffffff', '#ffe14d', '#ff5a5a', '#4dc3ff', '#7cff6b', '#000000']
+      .map((c, i) => `<button class="draw-color ${i ? '' : 'on'}" data-color="${c}" style="background:${c}"></button>`).join('')}
+      </div>
+      <input type="range" min="4" max="48" value="12" data-width title="Толщина">
+      <span class="muted" data-wlabel style="font-size:13px">12</span>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
+  const finish = blob => { close(); cb && cb(blob); };
+  const onKey = e => { if (e.key === 'Escape') finish(null); };
+  document.addEventListener('keydown', onKey);
+  $('[data-cancel]', modal).onclick = () => finish(null);
+
+  const cv = $('[data-canvas]', modal), ctx = cv.getContext('2d');
+  let base = null, color = '#ffffff', width = 12, strokes = [], cur = null;
+
+  function sizeCanvas(w, h) {
+    const max = 1280;
+    const k = Math.min(1, max / Math.max(w, h));
+    cv.width = Math.max(1, Math.round(w * k));
+    cv.height = Math.max(1, Math.round(h * k));
+    redraw();
+  }
+
+  function redraw() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (base) ctx.drawImage(base, 0, 0, cv.width, cv.height);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    [...strokes, ...(cur ? [cur] : [])].forEach(s => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.width;
+      ctx.beginPath();
+      s.pts.forEach((p, i) => i ? ctx.lineTo(p[0] * cv.width, p[1] * cv.height)
+        : ctx.moveTo(p[0] * cv.width, p[1] * cv.height));
+      if (s.pts.length === 1) ctx.lineTo(s.pts[0][0] * cv.width + .01, s.pts[0][1] * cv.height);
+      ctx.stroke();
+    });
+  }
+
+  const pos = e => {
+    const r = cv.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    cur = { color, width, pts: [pos(e)] }; redraw();
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!cur) return;
+    cur.pts.push(pos(e)); redraw();
+  });
+  const up = () => { if (cur) { strokes.push(cur); cur = null; redraw(); } };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+
+  $$('[data-color]', modal).forEach(b => b.onclick = () => {
+    color = b.dataset.color;
+    $$('[data-color]', modal).forEach(x => x.classList.toggle('on', x === b));
+  });
+  $('[data-width]', modal).oninput = e => {
+    width = +e.target.value;
+    $('[data-wlabel]', modal).textContent = width;
+  };
+  $('[data-undo]', modal).onclick = () => { strokes.pop(); redraw(); };
+  $('[data-wipe]', modal).onclick = () => { strokes = []; redraw(); };
+
+  $('[data-ok]', modal).onclick = () => {
+    if (!strokes.length) return finish(null);
+    if (isVideo) {
+      // прозрачный слой: рисунок ляжет поверх видео на сервере
+      cv.toBlob(b => finish(b), 'image/png');
+    } else {
+      cv.toBlob(b => finish(b), 'image/jpeg', 0.92);
+    }
+  };
+
+  // база: для фото — сама картинка, для видео — только кадр для размеров
+  const probe = new Image();
+  probe.onload = () => {
+    base = isVideo ? null : probe;
+    sizeCanvas(probe.naturalWidth || 720, probe.naturalHeight || 1280);
+  };
+  if (isVideo) {
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = src;
+    v.onloadedmetadata = () => { sizeCanvas(v.videoWidth || 720, v.videoHeight || 1280); v.src = ''; };
+    v.onerror = () => sizeCanvas(720, 1280);
+  } else {
+    probe.src = src;
+  }
+}
 
 /* ---------------- views: home ---------------- */
 views.home = async function (screen, r) {
@@ -501,269 +597,12 @@ views.home = async function (screen, r) {
     more: () => true,
   });
 };
-
-/* ---------------- редактор: обрезка фото ---------------- */
-function photoEditor(files, done) {
-  let idx = 0;
-  const out = new Array(files.length);
-  const m = modal(`
-    <div class="ed-head"><b data-title>Обрезка фото</b><span class="muted" data-pos></span></div>
-    <div class="ed-stage" data-stage><img data-img alt=""></div>
-    <div class="ed-ratios">
-      <button data-r="1" class="on">1:1</button>
-      <button data-r="0.5625">9:16</button>
-      <button data-r="1.7778">16:9</button>
-      <button data-r="0.8">4:5</button>
-      <button data-r="0">Ориг.</button>
-    </div>
-    <div class="ed-hint">Тяните фото, колесо мыши или щипок — масштаб</div>
-    <div class="row" style="gap:10px;margin-top:14px">
-      <button class="btn ghost" data-cancel>Отмена</button>
-      <button class="btn" data-ok>Готово</button>
-    </div>`);
-
-  const stage = $('[data-stage]', m), img = $('[data-img]', m);
-  const okBtn = $('[data-ok]', m);
-  let ratio = 1, natW = 1, natH = 1, cover = 1, scale = 1, dx = 0, dy = 0;
-
-  function stageSize() {
-    const maxW = Math.min(330, (m.clientWidth || 330) - 44);
-    const maxH = 300;
-    const r = ratio || (natW / natH) || 1;
-    let w = maxW, h = w / r;
-    if (h > maxH) { h = maxH; w = h * r; }
-    return { w: Math.max(60, Math.round(w)), h: Math.max(60, Math.round(h)) };
-  }
-  function fit(reset) {
-    const s = stageSize();
-    cover = Math.max(s.w / natW, s.h / natH);
-    if (reset) { scale = 1; dx = 0; dy = 0; }
-    apply();
-  }
-  function apply() {
-    const s = stageSize();
-    stage.style.width = s.w + 'px';
-    stage.style.height = s.h + 'px';
-    const bw = natW * cover * scale, bh = natH * cover * scale;
-    const mx = Math.max(0, (bw - s.w) / 2), my = Math.max(0, (bh - s.h) / 2);
-    dx = Math.max(-mx, Math.min(mx, dx));
-    dy = Math.max(-my, Math.min(my, dy));
-    img.style.width = (natW * cover) + 'px';
-    img.style.height = (natH * cover) + 'px';
-    img.style.transform = `translate(-50%,-50%) translate(${dx}px,${dy}px) scale(${scale})`;
-  }
-  function load() {
-    $$('.ed-ratios button', m).forEach(b => b.classList.toggle('on',
-      (b.dataset.r === '0' ? ratio === 0 : Math.abs(+b.dataset.r - ratio) < 0.01)));
-    $('[data-pos]', m).textContent = (idx + 1) + ' / ' + files.length;
-    okBtn.textContent = idx === files.length - 1 ? 'Готово' : 'Далее →';
-    if (img.src) URL.revokeObjectURL(img.src);
-    img.src = URL.createObjectURL(files[idx]);
-    img.onload = () => { natW = img.naturalWidth || 1; natH = img.naturalHeight || 1; fit(true); };
-  }
-
-  $$('.ed-ratios button', m).forEach(b => b.onclick = () => { ratio = +b.dataset.r; fit(true); });
-  $('[data-cancel]', m).onclick = () => Overlay.close();
-
-  okBtn.onclick = () => {
-    const s = stageSize();
-    const per = cover * scale;
-    const dispW = natW * per, dispH = natH * per;
-    const left = s.w / 2 + dx - dispW / 2;
-    const top = s.h / 2 + dy - dispH / 2;
-    let sw = s.w / per, sh = s.h / per;
-    let sx = Math.max(0, Math.min(natW - sw, -left / per));
-    let sy = Math.max(0, Math.min(natH - sh, -top / per));
-    sw = Math.min(sw, natW); sh = Math.min(sh, natH);
-    const k = Math.min(1, 2048 / Math.max(sw, sh));
-    const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.round(sw * k));
-    cv.height = Math.max(1, Math.round(sh * k));
-    cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
-    cv.toBlob(blob => {
-      const name = (files[idx].name || 'photo.jpg').replace(/\.[^.]+$/, '') + '.jpg';
-      out[idx] = new File([blob], name, { type: 'image/jpeg' });
-      idx++;
-      if (idx >= files.length) { Overlay.close(); done(out.filter(Boolean)); }
-      else load();
-    }, 'image/jpeg', 0.92);
-  };
-
-  /* перетаскивание и масштаб */
-  const pts = new Map();
-  let pinch = 0;
-  const dist = () => {
-    const a = [...pts.values()];
-    return a.length < 2 ? 0 : Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
-  };
-  stage.style.touchAction = 'none';
-  stage.addEventListener('pointerdown', e => {
-    stage.setPointerCapture(e.pointerId);
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    pinch = dist();
-  });
-  stage.addEventListener('pointermove', e => {
-    if (!pts.has(e.pointerId)) return;
-    const prev = pts.get(e.pointerId);
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.size >= 2) {
-      const d = dist();
-      if (pinch > 0 && d > 0) { scale = Math.max(1, Math.min(7, scale * (d / pinch))); pinch = d; }
-    } else {
-      dx += e.clientX - prev.x;
-      dy += e.clientY - prev.y;
-    }
-    apply();
-  });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
-    stage.addEventListener(ev, e => { pts.delete(e.pointerId); pinch = dist(); }));
-  stage.addEventListener('wheel', e => {
-    e.preventDefault();
-    scale = Math.max(1, Math.min(7, scale * (e.deltaY < 0 ? 1.08 : 0.92)));
-    apply();
-  }, { passive: false });
-
-  load();
-}
-
-/* ---------------- редактор: обрезка и склейка видео ---------------- */
-function videoEditor(files, done) {
-  if (files.length === 1) trimEditor(files[0], done);
-  else concatEditor(files, done);
-}
-
-function trimEditor(src, done) {
-  const url = URL.createObjectURL(src);
-  const m = modal(`
-    <b>Обрезка видео</b>
-    <video class="ed-video" data-v src="${url}" controls playsinline muted></video>
-    <label class="lbl">Начало — <b data-s0>0.0</b> сек</label>
-    <input type="range" class="ed-range" data-s min="0" max="1" step="0.05" value="0">
-    <label class="lbl">Конец — <b data-s1>0.0</b> сек</label>
-    <input type="range" class="ed-range" data-e min="0" max="1" step="0.05" value="1">
-    <div class="ed-hint">В итоге получится <b data-len>—</b></div>
-    <div class="row" style="gap:10px;margin-top:16px">
-      <button class="btn ghost" data-cancel>Отмена</button>
-      <button class="btn" data-ok>✂️ Обрезать</button>
-    </div>
-    <div class="ed-proc" data-proc hidden><div class="spin"></div><span>Обрабатываем видео…</span></div>`);
-
-  const v = $('[data-v]', m), s0 = $('[data-s]', m), s1 = $('[data-e]', m);
-  let dur = 0;
-  const n = x => (Math.round(x * 10) / 10).toFixed(1);
-  function paint() {
-    const a = +s0.value, b = +s1.value;
-    $('[data-s0]', m).textContent = n(a);
-    $('[data-s1]', m).textContent = n(b);
-    $('[data-len]', m).textContent = n(Math.max(0, b - a)) + ' сек';
-  }
-  v.onloadedmetadata = () => {
-    dur = v.duration || 0;
-    s0.max = s1.max = dur;
-    s1.value = dur;
-    paint();
-  };
-  const seek = () => { try { v.currentTime = +s0.value; } catch (e) { } };
-  s0.oninput = () => {
-    if (+s0.value > +s1.value - 0.2) s0.value = Math.max(0, +s1.value - 0.2);
-    paint(); seek();
-  };
-  s1.oninput = () => {
-    if (+s1.value < +s0.value + 0.2) s1.value = Math.min(dur, +s0.value + 0.2);
-    paint();
-    try { v.currentTime = +s1.value; } catch (e) { }
-  };
-  v.ontimeupdate = () => { if (v.currentTime > +s1.value) v.pause(); };
-
-  $('[data-cancel]', m).onclick = () => { URL.revokeObjectURL(url); Overlay.close(); };
-  $('[data-ok]', m).onclick = async () => {
-    const btn = $('[data-ok]', m);
-    btn.disabled = true;
-    $('[data-proc]', m).hidden = false;
-    try {
-      const fd = new FormData();
-      fd.append('file', src, src.name || 'video.mp4');
-      fd.append('start', String(+s0.value));
-      fd.append('end', String(+s1.value));
-      const d = await api('/api/edit/trim', { method: 'POST', body: fd });
-      URL.revokeObjectURL(url);
-      Overlay.close();
-      done(d.media);
-    } catch (e) {
-      btn.disabled = false;
-      $('[data-proc]', m).hidden = true;
-    }
-  };
-}
-
-function concatEditor(files0, done) {
-  let list = files0.slice();
-  const m = modal(`
-    <b>Склейка видео</b>
-    <div class="ed-list" data-list></div>
-    <label class="btn ghost sm" for="f-more" style="display:block;text-align:center;margin-top:10px">＋ Добавить видео</label>
-    <input id="f-more" type="file" accept="video/*" multiple hidden>
-    <div class="ed-hint">Клип склеятся в том порядке, в котором они идут сверху вниз.</div>
-    <div class="row" style="gap:10px;margin-top:14px">
-      <button class="btn ghost" data-cancel>Отмена</button>
-      <button class="btn" data-ok>✂️ Склеить (${list.length})</button>
-    </div>
-    <div class="ed-proc" data-proc hidden><div class="spin"></div><span>Склеиваем видео…</span></div>`);
-
-  function paint() {
-    $('[data-list]', m).innerHTML = list.map((f, i) => `
-      <div class="ed-item">
-        <span class="n">${i + 1}</span>
-        <span class="nm">${esc((f.name || 'видео').slice(0, 26))}</span>
-        <button data-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button data-down="${i}" ${i === list.length - 1 ? 'disabled' : ''}>↓</button>
-        <button data-rm="${i}">✕</button>
-      </div>`).join('');
-    $('[data-ok]', m).textContent = '✂️ Склеить (' + list.length + ')';
-    $$('[data-up]', m).forEach(b => b.onclick = () => {
-      const i = +b.dataset.up; [list[i - 1], list[i]] = [list[i], list[i - 1]]; paint();
-    });
-    $$('[data-down]', m).forEach(b => b.onclick = () => {
-      const i = +b.dataset.down; [list[i + 1], list[i]] = [list[i], list[i + 1]]; paint();
-    });
-    $$('[data-rm]', m).forEach(b => b.onclick = () => {
-      list.splice(+b.dataset.rm, 1);
-      if (!list.length) { Overlay.close(); return; }
-      paint();
-    });
-  }
-  paint();
-
-  $('#f-more', m).onchange = e => {
-    [...e.target.files].forEach(f => list.push(f));
-    e.target.value = '';
-    paint();
-  };
-  $('[data-cancel]', m).onclick = () => Overlay.close();
-  $('[data-ok]', m).onclick = async () => {
-    if (list.length < 2) { toast('Нужно минимум два видео'); return; }
-    const btn = $('[data-ok]', m);
-    btn.disabled = true;
-    $('[data-proc]', m).hidden = false;
-    try {
-      const fd = new FormData();
-      list.forEach((f, i) => fd.append('files', f, f.name || ('v' + i + '.mp4')));
-      const d = await api('/api/edit/concat', { method: 'POST', body: fd });
-      Overlay.close();
-      done(d.media);
-    } catch (e) {
-      btn.disabled = false;
-      $('[data-proc]', m).hidden = true;
-    }
-  };
-}
-
 /* ---------------- views: plus / upload ---------------- */
 views.plus = async function (screen) {
   if (!requireAuth()) return;
   let mode = 'video';
   let file = null, thumbBlob = null, previewURL = null;
-  let editedMedia = '', extraFiles = [];
+  let drawBlob = null;        // рисунок поверх видео (PNG с прозрачностью)
   let recorder = null, chunks = [], recStream = null, recTimer = null, liveBlob = null;
 
   screen.innerHTML = `
@@ -772,7 +611,6 @@ views.plus = async function (screen) {
     <div class="up-tabs">
       <button class="up-tab" data-m="photo"><span class="ic">🖼</span>Фото</button>
       <button class="up-tab on" data-m="video"><span class="ic">🎬</span>Видео</button>
-      <button class="up-tab" data-m="edit"><span class="ic">✂️</span>Редактор</button>
       <button class="up-tab" data-m="live"><span class="ic">📡</span>Эфир</button>
     </div>
 
@@ -792,19 +630,6 @@ views.plus = async function (screen) {
         <span class="muted" style="font-size:13px">MP4 / WebM, до 400 МБ</span>
       </label>
       <input id="f-video" type="file" accept="video/*" hidden>
-    </div>
-
-    <div data-pane="edit" hidden>
-      <label class="drop" for="f-edit">
-        <span class="ic">✂️</span>
-        <b>Выбрать фото или видео</b>
-        <span class="muted" style="font-size:13px">Обрезка, кадрирование, склейка</span>
-      </label>
-      <input id="f-edit" type="file" accept="image/*,video/*" multiple hidden>
-      <div class="inline-note" style="margin-top:14px">
-        Фото обрезается по кадру (1:1, 9:16, 16:9, 4:5), видео — по времени,
-        а если выбрать два и больше видео — они склеятся в одно ролика.
-      </div>
     </div>
 
     <div data-pane="live" hidden>
@@ -827,9 +652,13 @@ views.plus = async function (screen) {
     <div data-preview hidden style="margin-top:16px">
       <div class="spread" style="margin-bottom:10px">
         <b>Предпросмотр</b>
-        <button class="btn sm ghost" data-clear>Убрать</button>
+        <div class="row" style="gap:8px">
+          <button class="btn sm ghost" data-draw>✏️ Нарисовать</button>
+          <button class="btn sm ghost" data-clear>Убрать</button>
+        </div>
       </div>
       <div data-holder></div>
+      <div class="inline-note" data-drawnote hidden style="margin-top:10px">✏️ Рисунок будет на фото или поверх видео</div>
       <label class="lbl">Подпись</label>
       <textarea class="field" data-caption maxlength="500" placeholder="Расскажите о видео... #теги"></textarea>
       <label class="lbl">Звук / название трека</label>
@@ -862,7 +691,8 @@ views.plus = async function (screen) {
 
   function clearFile() {
     file = null; thumbBlob = null; liveBlob = null;
-    editedMedia = ''; extraFiles = [];
+    drawBlob = null;
+    $('[data-drawnote]', screen).hidden = true;
     if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
     holder.innerHTML = ''; previewBox.hidden = true;
   }
@@ -872,7 +702,6 @@ views.plus = async function (screen) {
     if (!f) return;
     file = f;
     liveBlob = null;
-    editedMedia = '';
     if (previewURL) URL.revokeObjectURL(previewURL);
     previewURL = URL.createObjectURL(f);
     if (f.type.startsWith('video/')) {
@@ -886,38 +715,28 @@ views.plus = async function (screen) {
     previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  async function showEdited(media) {
-    if (!media) return;
-    file = null; extraFiles = [];
-    editedMedia = media;
-    liveBlob = null;
-    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
-    const url = mediaURL(media);
-    holder.innerHTML = `<video class="preview" src="${url}" controls playsinline muted></video>`;
-    thumbBlob = await videoThumb(url);
-    previewBox.hidden = false;
-    previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
   $('#f-photo', screen).onchange = e => showFile(e.target.files[0]);
   $('#f-video', screen).onchange = e => showFile(e.target.files[0]);
 
-  $('#f-edit', screen).onchange = e => {
-    const files = [...e.target.files];
-    e.target.value = '';
-    if (!files.length) return;
-    const vids = files.filter(f => f.type.startsWith('video/'));
-    if (vids.length) {
-      if (files.length > vids.length) toast('В редактор попадут только видео');
-      videoEditor(vids, showEdited);
-    } else {
-      photoEditor(files, async results => {
-        if (results.length === 1) { await showFile(results[0]); return; }
-        extraFiles = results.slice(1);
-        await showFile(results[0]);
-        toast('Обработано фото: ' + results.length + ' — опубликуются как отдельные посты');
-      });
-    }
+  /* ---- карандаш: рисование поверх фото/видео ---- */
+  $('[data-draw]', screen).onclick = () => {
+    if (!file) return toast('Сначала выберите фото или видео');
+    const isVideo = file.type.startsWith('video/');
+    drawEditor(previewURL, isVideo, blob => {
+      if (!blob) return;
+      if (isVideo) {
+        drawBlob = blob;
+        $('[data-drawnote]', screen).hidden = false;
+        toast('Рисунок сохранён — наложится при публикации');
+      } else {
+        file = blob;
+        thumbBlob = blob;
+        URL.revokeObjectURL(previewURL);
+        previewURL = URL.createObjectURL(blob);
+        holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">`;
+        toast('Рисунок наложен на фото');
+      }
+    });
   };
 
   /* ---- камера / эфир ---- */
@@ -998,29 +817,22 @@ views.plus = async function (screen) {
   $('[data-publish]', screen).onclick = async () => {
     const caption = $('[data-caption]', screen).value.trim();
     const sound = $('[data-sound]', screen).value.trim();
-    const jobs = [];
-    if (editedMedia) jobs.push({ media: editedMedia });
-    if (file) jobs.push({ file });
-    extraFiles.forEach(f => jobs.push({ file: f }));
-    if (!jobs.length) { toast('Сначала выберите фото или видео'); return; }
+    if (!file) { toast('Сначала выберите фото или видео'); return; }
     const btn = $('[data-publish]', screen);
     const prog = $('[data-progress]', screen);
     btn.disabled = true; prog.style.display = 'block';
     try {
-      for (let i = 0; i < jobs.length; i++) {
-        const fd = new FormData();
-        if (jobs[i].media) fd.append('media', jobs[i].media);
-        else fd.append('file', jobs[i].file, jobs[i].file.name || 'media');
-        if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
-        fd.append('caption', caption);
-        fd.append('sound', sound);
-        if (mode === 'live') fd.append('kind', 'live');
-        await uploadWithProgress(fd, p => {
-          const pct = jobs.length > 1 ? (i + p) / jobs.length : p;
-          $('[data-pct]', screen).textContent = Math.round(pct * 100) + '%';
-          $('[data-bar]', screen).style.width = Math.round(pct * 100) + '%';
-        });
-      }
+      const fd = new FormData();
+      fd.append('file', file, file.name || 'media');
+      if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
+      if (drawBlob && file.type.startsWith('video/')) fd.append('draw', drawBlob, 'draw.png');
+      fd.append('caption', caption);
+      fd.append('sound', sound);
+      if (mode === 'live') fd.append('kind', 'live');
+      await uploadWithProgress(fd, p => {
+        $('[data-pct]', screen).textContent = Math.round(p * 100) + '%';
+        $('[data-bar]', screen).style.width = Math.round(p * 100) + '%';
+      });
       toast('Опубликовано! 🥔');
       clearFile(); stopCam();
       $('[data-caption]', screen).value = '';

@@ -56,8 +56,7 @@ views.profile = async function (screen, r) {
     const grid = $('[data-grid]', screen);
     if (grid) {
       grid.innerHTML = videoGrid(items, tab === 'saved' ? 'Нет сохранённых видео'
-        : tab === 'reposts' ? 'Пока нет репостов'
-          : tab === 'liked' ? 'Пока нет лайков' : 'Пока нет видео');
+        : tab === 'liked' ? 'Пока нет лайков' : 'Пока нет видео');
       $$('.gcell', grid).forEach(c => c.onclick = () => openFeedOverlay(items, +c.dataset.i));
     }
   }
@@ -87,7 +86,6 @@ views.profile = async function (screen, r) {
     <div data-circles></div>
     <div class="ptabs">
       <button class="on" data-t="videos">Видео</button>
-      <button data-t="reposts">Репосты</button>
       ${isMe ? `<button data-t="saved">Сохранённые</button><button data-t="liked">Лайки</button>` : ''}
     </div>
     <div data-grid><div class="loader"><div class="spin"></div></div></div>
@@ -243,6 +241,9 @@ views.settings = async function (screen) {
         </button>
         <button class="theme-card ${t === 'light' ? 'on' : ''}" data-th="light">
           <div class="sw light"></div><b>☀️ Светлая</b>
+        </button>
+        <button class="theme-card ${t === 'purple' ? 'on' : ''}" data-th="purple">
+          <div class="sw purple"></div><b>🍇 Фиолетовая</b>
         </button>
       </div>
 

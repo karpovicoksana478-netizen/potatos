@@ -88,13 +88,19 @@ const subs = n => plural(n, 'подписчик', 'подписчика', 'по�
 
 /* ---------------- темы ---------------- */
 const Theme = {
-  get() { return localStorage.getItem('potatos_theme') === 'light' ? 'light' : 'dark'; },
+  get() {
+    const t = localStorage.getItem('potatos_theme');
+    return (t === 'light' || t === 'purple') ? t : 'dark';
+  },
   set(name) {
-    name = name === 'light' ? 'light' : 'dark';
+    name = (name === 'light' || name === 'purple') ? name : 'dark';
     localStorage.setItem('potatos_theme', name);
     document.documentElement.dataset.theme = name;
   },
-  title(t) { return (t || this.get()) === 'light' ? 'Светлая' : 'Тёмная'; }
+  title(t) {
+    t = t || this.get();
+    return t === 'light' ? 'Светлая' : t === 'purple' ? 'Фиолетовая' : 'Тёмная';
+  }
 };
 
 /* ---------------- api ---------------- */
@@ -230,7 +236,14 @@ const TABS = [
 function renderTabbar(active) {
   const bar = $('#tabbar');
   bar.hidden = false;
-  bar.innerHTML = TABS.map(t => {
+  // у администратора появляется вкладка «Админка»
+  let tabs = TABS;
+  if (App.me && App.me.is_admin) {
+    tabs = TABS.map(t => t.id === 'profile'
+      ? { id: 'admin', label: 'Админка', ic: '🛡' } : t).concat(
+        TABS.filter(t => t.id === 'profile'));
+  }
+  bar.innerHTML = tabs.map(t => {
     const on = active === t.id ? ' on' : '';
     if (t.plus) return `<button class="tab plus" data-tab="plus"><span class="ic">+</span><span>${t.label}</span></button>`;
     let inner = `<span class="ic">${t.ic}</span>`;

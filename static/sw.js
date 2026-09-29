@@ -1,12 +1,14 @@
-const CACHE = 'potatos-v4';
+const CACHE = 'potatos-v5';
 const ASSETS = [
   '/', '/static/style.css', '/static/app.js', '/static/feed.js',
-  '/static/chats.js', '/static/profile.js', '/static/icon-192.png',
-  '/static/manifest.webmanifest'
+  '/static/chats.js', '/static/profile.js', '/static/admin.js',
+  '/static/icon-192.png', '/static/manifest.webmanifest'
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE)
+    .then(c => Promise.all(ASSETS.map(a => c.add(a).catch(() => null))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -15,23 +17,50 @@ self.addEventListener('activate', e => {
   ).then(() => self.clients.claim()));
 });
 
-self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET') return;
-  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/media') || url.pathname.startsWith('/ws'))
-    return;
+// страница быстрее открывается из кэша, фоном обновляется
+async function staleWhileRevalidate(req) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(req);
+  const network = fetch(req).then(res => {
+    if (res && res.ok && res.type === 'basic') cache.put(req, res.clone());
+    return res;
+  }).catch(() => cached);
+  return cached || network;
+}
 
-  // сначала сеть (чтобы обновления подхватывались сразу), офлайн — из кэша
-  e.respondWith(
-    fetch(e.request).then(res => {
-      if (res && res.ok && res.type === 'basic') {
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
-      }
-      return res;
-    }).catch(() =>
-      caches.match(e.request).then(cached => cached || (e.request.mode === 'navigate' ? caches.match('/') : null))
-        .then(r => r || Response.error())
-    )
-  );
+// картинки (аватарки, превью) — из кэша сразу, без ожидания сети
+async function cacheFirst(req) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(req);
+  if (cached) {
+    fetch(req).then(res => { if (res && res.ok) cache.put(req, res.clone()); }).catch(() => { });
+    return cached;
+  }
+  const res = await fetch(req);
+  if (res && res.ok) {
+    const len = +(res.headers.get('content-length') || 0);
+    const type = res.headers.get('content-type') || '';
+    if (len && len < 3 * 1024 * 1024 && type.startsWith('image/'))
+      cache.put(req, res.clone());
+  }
+  return res;
+}
+
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) return;
+  if (req.headers.get('range')) return;      // видео/аудио потоком — не перехватываем
+
+  if (url.pathname.startsWith('/static/')) {
+    e.respondWith(staleWhileRevalidate(req));
+  } else if (url.pathname.startsWith('/media/')) {
+    e.respondWith(cacheFirst(req).catch(() => Response.error()));
+  } else {
+    e.respondWith(
+      staleWhileRevalidate(req).catch(() =>
+        (req.mode === 'navigate' ? caches.match('/') : null).then(r => r || Response.error()))
+    );
+  }
 });

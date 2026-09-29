@@ -1,10 +1,11 @@
 import io
+import os
 import random
 import sys
 
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("POTATOS_BASE", "http://127.0.0.1:8000")
 c = httpx.Client(base_url=BASE, timeout=60)
 ok = 0
 
@@ -65,7 +66,8 @@ def main():
     check("like toggle off", c.post(f"/api/video/{vid}/like", headers=ha).json()["liked"] is False)
     c.post(f"/api/video/{vid}/like", headers=ha)
     check("save", c.post(f"/api/video/{vid}/save", headers=ha).json()["saved"] is True)
-    check("repost", c.post(f"/api/video/{vid}/repost", headers=ha).json()["reposted"] is True)
+    check("repost endpoint removed",
+          c.post(f"/api/video/{vid}/repost", headers=ha).status_code in (404, 405))
     check("saved list", len(c.get("/api/saved", headers=ha).json()["items"]) == 1)
     cm = c.post(f"/api/video/{vid}/comments", headers=ha, data={"text": "класс!"}).json()
     check("comment", cm["text"] == "класс!")
@@ -134,6 +136,31 @@ def main():
                      data={"media": "videos/x.mp4", "caption": "x"}).status_code == 400)
         check("no media no file rejected",
               c.post("/api/upload", headers=ha, data={"caption": "x"}).status_code == 400)
+
+        # рисунок поверх видео: сервер накладывает PNG и делает новое превью
+        from PIL import Image as _Image
+        import io as _io
+        buf = _io.BytesIO()
+        frame = _Image.new("RGBA", (320, 240), (0, 0, 0, 0))
+        for x in range(40, 280):
+            for y in range(100, 140):
+                frame.putpixel((x, y), (255, 40, 40, 255))
+        frame.save(buf, "PNG")
+        with_draw = c.post(
+            "/api/upload", headers=ha,
+            files={"file": ("v.mp4", blob, "video/mp4"),
+                   "draw": ("draw.png", buf.getvalue(), "image/png")},
+            data={"caption": "нарисовано карандашом"}).json()
+        check("video with draw", with_draw.get("kind") == "video"
+              and with_draw.get("media", "").startswith("videos/"), with_draw)
+        check("draw thumb from frame", with_draw.get("thumb", "").startswith("thumbs/"), with_draw)
+        check("draw video served", c.get("/media/" + with_draw["media"]).status_code == 200)
+        bad_draw = c.post(
+            "/api/upload", headers=ha,
+            files={"file": ("v.mp4", blob, "video/mp4"),
+                   "draw": ("draw.png", b"", "image/png")},
+            data={"caption": "пустой рисунок"}).json()
+        check("bad draw ignored", bad_draw.get("kind") == "video", bad_draw)
     else:
         print("  SKIP edit tests (ffmpeg недоступен)")
 
@@ -270,6 +297,58 @@ def main():
     check("js served", c.get("/static/app.js").status_code == 200)
     check("icon served", c.get("/static/icon-512.png").status_code == 200)
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
+    check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
+    check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
+    check("shell bumped", "v=6" in c.get("/").text and "admin.js" in c.get("/").text)
+
+    # --- админка: вход, список, баны, чужие видео ---
+    adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
+    check("admin login", "token" in adm, adm)
+    hadm = {"Authorization": "Bearer " + adm["token"]}
+    check("admin flagged", c.get("/api/me", headers=hadm).json()["user"]["is_admin"] is True)
+    check("admin online flag", c.get("/api/me", headers=hadm).json()["user"].get("online") is True)
+    check("admin stats", c.get("/api/admin/stats", headers=hadm).json()["users"] >= 3)
+    check("admin users list", any(u["username"] == U1 for u in
+                                  c.get("/api/admin/users", headers=hadm).json()["items"]))
+    check("admin search", any(u["username"] == U1 for u in
+                              c.get("/api/admin/users", params={"q": U1}, headers=hadm).json()["items"]))
+    check("admin api needs auth", c.get("/api/admin/users").status_code == 401)
+    check("admin api forbids user", c.get("/api/admin/users", headers=ha).status_code == 403)
+
+    check("admin temp ban",
+          c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,
+                 json={"mode": "temp", "hours": 1}).json()["banned"] is True)
+    check("banned cannot login",
+          c.post("/api/login", json={"username": U2, "password": "1234"}).status_code == 403)
+    check("banned token rejected", c.get("/api/me", headers=hb).status_code in (401, 403))
+    check("banned hidden from feed",
+          all(i["user"]["username"] != U2 for i in c.get("/api/feed").json()["items"]), "feed")
+    check("admin unban",
+          c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,
+                 json={"mode": "unban"}).json()["banned"] is False)
+    relogin = c.post("/api/login", json={"username": U2, "password": "1234"}).json()
+    check("login after unban", "token" in relogin, relogin)
+    hb = {"Authorization": "Bearer " + relogin["token"]}
+
+    check("admin blocks posts",
+          c.post(f"/api/admin/users/{uid2}/posts", headers=hadm,
+                 json={"mode": "perm"}).json()["blocked"] is True)
+    check("posts banned cannot upload",
+          c.post("/api/upload", headers=hb,
+                 files={"file": ("x.jpg", png(), "image/jpeg")},
+                 data={"caption": "x"}).status_code == 403)
+    check("posts banned cannot comment",
+          c.post(f"/api/video/{vid}/comments", headers=hb, data={"text": "x"}).status_code == 403)
+    check("admin allows posts again",
+          c.post(f"/api/admin/users/{uid2}/posts", headers=hadm,
+                 json={"mode": "unban"}).json()["blocked"] is False)
+    check("bad mode rejected",
+          c.post(f"/api/admin/users/{uid2}/ban", headers=hadm, json={"mode": "nope"}).status_code == 400)
+
+    check("admin deletes foreign video",
+          c.delete(f"/api/video/{vid}", headers=hadm).json()["ok"] is True)
+    check("deleted video gone", c.delete(f"/api/video/{vid}", headers=hadm).status_code == 404)
+    check("owner cannot delete video", c.delete(f"/api/video/{vid}", headers=ha).status_code == 404)
 
     print(f"\n== PASSED {ok} checks ==")
 

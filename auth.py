@@ -43,12 +43,30 @@ def current_user(authorization: str = Header(default=""), x_token: str = Header(
     user = user_by_token(token)
     if not user:
         raise HTTPException(401, "Не авторизован")
+    if db.banned(user):
+        raise HTTPException(403, "Аккаунт заблокирован администратором")
+    _touch(user)
     return user
+
+
+def _touch(user: dict):
+    """Помечаем, что пользователь живой (для «в сети» в админ-панели)."""
+    import time as _time
+    now = int(_time.time())
+    if now - (user.get("last_seen") or 0) > 45:
+        try:
+            db.run("UPDATE users SET last_seen=? WHERE id=?", (now, user["id"]))
+            user["last_seen"] = now
+        except Exception:
+            pass
 
 
 def guest_or_user(authorization: str = Header(default=""), x_token: str = Header(default="")):
     token = x_token or authorization.replace("Bearer ", "").strip()
-    return user_by_token(token)
+    user = user_by_token(token)
+    if user:
+        _touch(user)
+    return user
 
 
 def public_user(u: dict, extra: dict = None) -> dict:
@@ -58,6 +76,8 @@ def public_user(u: dict, extra: dict = None) -> dict:
         "nickname": u["nickname"],
         "bio": u.get("bio", ""),
         "avatar": u.get("avatar", ""),
+        "is_admin": bool(u.get("is_admin") or 0),
+        "online": db.online(u),
     }
     if extra:
         out.update(extra)

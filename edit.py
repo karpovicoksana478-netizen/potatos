@@ -88,6 +88,61 @@ async def _to_tmp(upload: UploadFile, folder: str) -> str:
     return path
 
 
+def video_frame(media_rel: str):
+    """Первый кадр видео в JPEG — для превью (учитывает наложенный рисунок)."""
+    src = os.path.join(db.MEDIA, str(media_rel))
+    if not os.path.isfile(src):
+        return None
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "frame.jpg")
+        try:
+            _run(["-i", src, "-frames:v", "1", "-q:v", "4", "-y", out])
+        except HTTPException:
+            return None
+        try:
+            with open(out, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+
+def burn_overlay(media_rel: str, png: bytes) -> str:
+    """Накладывает рисунок (PNG с прозрачностью) поверх видео, как нарисовали карандашом.
+
+    Возвращает новый путь относительно MEDIA (videos/...). Если наложить не вышло —
+    возвращает исходный файл, чтобы публикация всё равно прошла.
+    """
+    if not png or not str(media_rel).startswith("videos/"):
+        return media_rel
+    src = os.path.join(db.MEDIA, media_rel)
+    if not os.path.isfile(src):
+        return media_rel
+    with tempfile.TemporaryDirectory() as d:
+        inp = os.path.join(d, "in.mp4")
+        shutil.copyfile(src, inp)
+        ov = os.path.join(d, "draw.png")
+        with open(ov, "wb") as f:
+            f.write(png)
+        out = os.path.join(d, "out.mp4")
+        try:
+            _run(["-i", inp, "-i", ov,
+                  "-filter_complex",
+                  "[1:v]format=rgba[ov];[0:v][ov]overlay=0:0:format=auto,"
+                  "scale=trunc(iw/2)*2:trunc(ih/2)*2[v]",
+                  "-map", "[v]", "-map", "0:a?"]
+                 + VIDEO_ARGS + AUDIO_ARGS + ["-movflags", "+faststart", out])
+        except HTTPException:
+            print("burn_overlay: не удалось наложить рисунок, публикуем оригинал")
+            return media_rel
+        new_rel = "videos/" + secrets.token_hex(12) + ".mp4"
+        shutil.move(out, os.path.join(db.MEDIA, new_rel))
+    try:
+        os.remove(src)
+    except OSError:
+        pass
+    return new_rel
+
+
 @router.post("/edit/trim")
 async def trim(file: UploadFile = File(...),
                start: float = Form(0), end: float = Form(0),

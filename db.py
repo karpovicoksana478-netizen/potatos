@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS users (
   password TEXT NOT NULL,
   bio TEXT NOT NULL DEFAULT '',
   avatar TEXT NOT NULL DEFAULT '',
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  banned_until INTEGER NOT NULL DEFAULT 0,
+  posts_banned_until INTEGER NOT NULL DEFAULT 0,
+  last_seen INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tokens (
@@ -147,6 +151,16 @@ def _migrate():
     ):
         if col not in have:
             db().execute(sql)
+    uhave = {r["name"] for r in db().execute("PRAGMA table_info(users)")}
+    for col, sql in (
+        ("is_admin", "ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0"),
+        ("banned_until", "ALTER TABLE users ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0"),
+        ("posts_banned_until",
+         "ALTER TABLE users ADD COLUMN posts_banned_until INTEGER NOT NULL DEFAULT 0"),
+        ("last_seen", "ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if col not in uhave:
+            db().execute(sql)
     db().commit()
 
 
@@ -163,3 +177,23 @@ def init():
 
 def now():
     return int(time.time())
+
+
+def _expired(value) -> bool:
+    """Бан активен: -1 = навсегда, >0 = до момента (unix), 0 = нет бана."""
+    return value == -1 or (value or 0) > int(time.time())
+
+
+def banned(u) -> bool:
+    """Полный бан: вход и всё действие запрещены."""
+    return _expired((u or {}).get("banned_until") or 0)
+
+
+def posts_blocked(u) -> bool:
+    """Запрет публикаций: видео/фото и комментарии запрещены."""
+    return _expired((u or {}).get("posts_banned_until") or 0)
+
+
+def online(u) -> bool:
+    """Считается в сети, если проявился за последние 90 секунд."""
+    return int(time.time()) - ((u or {}).get("last_seen") or 0) <= 90
