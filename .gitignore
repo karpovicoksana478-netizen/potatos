@@ -19,3 +19,4 @@ venv/
 
 push.log
 push.err
+opencode_tmp/

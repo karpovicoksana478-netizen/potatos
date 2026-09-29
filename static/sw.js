@@ -1,7 +1,7 @@
-const CACHE = 'potatos-v6';
+const CACHE = 'potatos-v7';
 const ASSETS = [
   '/', '/static/style.css', '/static/app.js', '/static/feed.js',
-  '/static/chats.js', '/static/profile.js', '/static/admin.js',
+  '/static/chats.js', '/static/profile.js',
   '/static/icon-192.png', '/static/manifest.webmanifest'
 ];
 

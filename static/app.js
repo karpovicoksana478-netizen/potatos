@@ -236,14 +236,7 @@ const TABS = [
 function renderTabbar(active) {
   const bar = $('#tabbar');
   bar.hidden = false;
-  // у администратора появляется вкладка «Админка»
-  let tabs = TABS;
-  if (App.me && App.me.is_admin) {
-    tabs = TABS.map(t => t.id === 'profile'
-      ? { id: 'admin', label: 'Админка', ic: '🛡' } : t).concat(
-        TABS.filter(t => t.id === 'profile'));
-  }
-  bar.innerHTML = tabs.map(t => {
+  bar.innerHTML = TABS.map(t => {
     const on = active === t.id ? ' on' : '';
     if (t.plus) return `<button class="tab plus" data-tab="plus"><span class="ic">+</span><span>${t.label}</span></button>`;
     let inner = `<span class="ic">${t.ic}</span>`;
@@ -260,7 +253,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '7';
+const ASSET_V = '8';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {

@@ -36,10 +36,10 @@ views.profile = async function (screen, r) {
 
   screen.innerHTML = `<div class="loader"><div class="spin"></div></div>`;
 
-  let prof, stats, followers = [], tab = 'videos';
+  let prof, stats, followers = [], tab = 'videos', adm = null;
   try {
     const d = await api('/api/user/' + encodeURIComponent(username));
-    prof = d.user; stats = d.stats;
+    prof = d.user; stats = d.stats; adm = d.admin || null;
   } catch (e) { navigate('#/home'); return; }
 
   const loadTab = async () => {
@@ -68,7 +68,10 @@ views.profile = async function (screen, r) {
       ${isMe ? '<button class="back" data-settings style="font-size:17px">⚙</button>' : ''}
     </div>
     <div class="prof-head">
-      ${ava(prof.avatar, 'lg')}
+      <div class="ava-box">
+        ${ava(prof.avatar, 'lg')}
+        ${adm ? '<button class="prof-adm" data-adm title="Действия администратора">🛡</button>' : ''}
+      </div>
       <div class="prof-nick">${esc(prof.nickname)}</div>
       <div class="prof-user">@${esc(prof.username)}</div>
       ${prof.bio ? `<div class="prof-bio">${esc(prof.bio)}</div>` : ''}
@@ -94,6 +97,7 @@ views.profile = async function (screen, r) {
   $('[data-back]', screen) && ($('[data-back]', screen).onclick = () => history.back());
   $('[data-settings]', screen) && ($('[data-settings]', screen).onclick = () => navigate('#/settings'));
   $('[data-edit]', screen) && ($('[data-edit]', screen).onclick = () => navigate('#/edit'));
+  $('[data-adm]', screen) && ($('[data-adm]', screen).onclick = () => adminUserMenu(prof, adm));
 
   /* кружочки с аватарками подписчиков */
   try {
@@ -279,3 +283,63 @@ views.settings = async function (screen) {
     }, 'Выйти');
   };
 };
+
+/* ---------------- меню администратора в профиле ---------------- */
+function fmtTime(ts) {
+  try {
+    return new Date(ts * 1000).toLocaleString('ru-RU',
+      { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+
+function adminUserMenu(prof, adm) {
+  adm = adm || {};
+  const banNote = adm.banned
+    ? `<div class="inline-note">⛔ Аккаунт заблокирован${adm.banned_forever ? ' навсегда' : ' до ' + fmtTime(adm.banned_until)}</div>`
+    : `<div class="inline-note">✅ Аккаунт активен</div>`;
+  const postNote = adm.posts_blocked
+    ? `<div class="inline-note" style="margin-top:8px">🚫 Публикации запрещены${adm.posts_forever ? ' навсегда' : ' до ' + fmtTime(adm.posts_until)}</div>`
+    : '';
+
+  const m = sheet('🛡 ' + prof.nickname, `
+    <div class="lbl" style="margin-top:0">Аккаунт</div>
+    ${banNote}
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn sm danger" data-b="perm">⛔ Бан навсегда</button>
+      <button class="btn sm ghost" data-b="24">🕓 Бан на 24 часа</button>
+      <button class="btn sm ghost" data-b="168">🕓 Бан на 7 дней</button>
+      ${adm.banned ? '<button class="btn sm" data-b="unban">✅ Разбанить</button>' : ''}
+    </div>
+    <div class="lbl">Публикации</div>
+    ${postNote}
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:${postNote ? '10px' : '0'}">
+      <button class="btn sm danger" data-p="perm">🚫 Без постов навсегда</button>
+      <button class="btn sm ghost" data-p="24">🚫 Без постов 24 часа</button>
+      ${adm.posts_blocked ? '<button class="btn sm" data-p="unban">✅ Разрешить посты</button>' : ''}
+    </div>
+    <div style="height:16px"></div>`);
+
+  const act = (path, mode) => {
+    const hours = (mode === 'perm' || mode === 'unban') ? 0 : +mode;
+    const apiMode = (mode === 'perm' || mode === 'unban') ? mode : 'temp';
+    const what = path === 'ban'
+      ? (mode === 'perm' ? 'заблокировать навсегда'
+        : mode === 'unban' ? 'снять блокировку'
+          : `заблокировать на ${hours} ч.`)
+      : (mode === 'perm' ? 'запретить публикации навсегда'
+        : mode === 'unban' ? 'разрешить публикации снова'
+          : `запретить публикации на ${hours} ч.`);
+    confirmModal(`${what}?`, async () => {
+      try {
+        await api(`/api/admin/users/${prof.id}/${path}`,
+          { method: 'POST', body: { mode: apiMode, hours } });
+        Overlay.close();
+        toast('Готово');
+        render();
+      } catch (e) { }
+    }, 'Подтвердить');
+  };
+
+  $$('[data-b]', m).forEach(b => b.onclick = () => act('ban', b.dataset.b));
+  $$('[data-p]', m).forEach(b => b.onclick = () => act('posts', b.dataset.p));
+}

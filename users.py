@@ -103,7 +103,22 @@ def profile(username: str, user=Depends(auth.guest_or_user)):
     if not u:
         raise HTTPException(404, "Пользователь не найден")
     s = stats(u, user)
-    return {"user": auth.public_user(u), "stats": s}
+    out = {"user": auth.public_user(u), "stats": s}
+    # админу показываем статус бана — чтобы кнопки в профиле были понятны
+    if user and user.get("is_admin") and user["id"] != u["id"]:
+        now = db.now()
+
+        def _on(v):
+            return v == -1 or (v or 0) > now
+        out["admin"] = {
+            "banned": _on(u.get("banned_until")),
+            "banned_forever": u.get("banned_until") == -1,
+            "banned_until": u.get("banned_until") or 0,
+            "posts_blocked": _on(u.get("posts_banned_until")),
+            "posts_forever": u.get("posts_banned_until") == -1,
+            "posts_until": u.get("posts_banned_until") or 0,
+        }
+    return out
 
 
 @router.post("/user/{username}/follow")

@@ -299,7 +299,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=7" in c.get("/").text and "admin.js" in c.get("/").text)
+    check("shell bumped", "v=8" in c.get("/").text and "admin.js" not in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -314,6 +314,10 @@ def main():
                               c.get("/api/admin/users", params={"q": U1}, headers=hadm).json()["items"]))
     check("admin api needs auth", c.get("/api/admin/users").status_code == 401)
     check("admin api forbids user", c.get("/api/admin/users", headers=ha).status_code == 403)
+    check("profile shows status to admin",
+          c.get(f"/api/user/{U1}", headers=hadm).json().get("admin", {}).get("banned") is False)
+    check("profile hides status from user",
+          "admin" not in c.get(f"/api/user/{U1}", headers=ha).json())
 
     check("admin temp ban",
           c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,

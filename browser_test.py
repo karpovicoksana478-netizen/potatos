@@ -99,9 +99,15 @@ def main():
         check("нижняя навигация из 4 кнопок",
               len(driver.find_elements(By.CSS_SELECTOR, "#tabbar .tab")) == 4)
 
-        # наполняем ленту через API этим же пользователем
+        # наполняем ленту: сначала чужая публикация (потом проверим кнопку удаления)
         token = driver.execute_script("return App.token")
         h = {"Authorization": "Bearer " + token}
+        U2 = "ui2" + s
+        reg2 = c.post("/api/register", json={"nickname": "Второй", "username": U2, "password": "12345"}).json()
+        check("второй пользователь создан", "token" in reg2, reg2)
+        h2 = {"Authorization": "Bearer " + reg2["token"]}
+        c.post("/api/upload", headers=h2, files={"file": ("o.jpg", img((200, 60, 180)), "image/jpeg")},
+               data={"caption": "чужая публикация #" + s, "sound": "чужой звук"})
         for col in [(255, 200, 60), (90, 200, 160), (240, 110, 140)]:
             c.post("/api/upload", headers=h, files={"file": ("v.jpg", img(col), "image/jpeg")},
                    data={"caption": "тестовая публикация #" + s, "sound": "оригинальный звук"})
@@ -111,9 +117,11 @@ def main():
         check("лента показывает посты", len(posts) >= 3, len(posts))
         check("в ленте есть действия (лайк/коммент)",
               len(driver.find_elements(By.CSS_SELECTOR, ".post [data-like]")) >= 3)
-        check("медиа занимает весь экран",
+        check("медиа как раньше (contain)",
               driver.execute_script(
-                  "return getComputedStyle(document.querySelector('.post .media')).objectFit") == "cover")
+                  "return getComputedStyle(document.querySelector('.post .media')).objectFit") == "contain")
+        check("у обычного юзера нет кнопки удаления",
+              len(driver.find_elements(By.CSS_SELECTOR, ".post [data-del]")) == 0)
         check("текст звука анимируется в ноту",
               "sndroll" in driver.execute_script(
                   "var m=document.querySelector('.post .snd .marq');"
@@ -255,6 +263,9 @@ def main():
         check("панель действий участника",
               len(driver.find_elements(By.CSS_SELECTOR, ".sheet [data-promote]")) == 1)
         shot(driver, "16-member")
+        WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".sheet [data-promote]")))
+        time.sleep(0.4)
         driver.find_element(By.CSS_SELECTOR, ".sheet [data-promote]").click()
         WebDriverWait(driver, 12).until(
             lambda d: "админ" in d.find_element(By.CSS_SELECTOR, ".sheet [data-members]").text)
@@ -373,7 +384,7 @@ def main():
         check("тёмная тема включена",
               driver.execute_script("return document.documentElement.dataset.theme") == "dark")
 
-        # админка: вход аккаунтом администратора (данные из кода)
+        # админ: отдельного раздела нет, всё — кнопкой в профиле человека
         driver.execute_script("localStorage.removeItem('potatos_token');location.reload()")
         time.sleep(2.5)
         wait(driver, ".auth", 15)
@@ -384,19 +395,64 @@ def main():
         time.sleep(1.5)
         check("вход администратором",
               driver.execute_script("return App.me && App.me.is_admin") is True)
-        check("пятая вкладка «Админка»",
-              len(driver.find_elements(By.CSS_SELECTOR, "#tabbar .tab")) == 5)
-        driver.get(BASE + "/#/admin")
-        wait(driver, ".admin-row", 15)
+        check("раздел «Админка» убран",
+              len(driver.find_elements(By.CSS_SELECTOR, "#tabbar .tab")) == 4)
+        check("вкладки обычного вида",
+              driver.execute_script(
+                  "return [...document.querySelectorAll('#tabbar .tab')].map(t=>t.dataset.tab).join(',')")
+              == "home,plus,chats,profile")
+
+        # кнопка удаления чужого видео над аватаркой
+        driver.get(BASE + "/#/home")
+        WebDriverWait(driver, 25).until(lambda d: d.find_elements(By.CSS_SELECTOR, ".post"))
         time.sleep(1.5)
-        check("список пользователей в админке",
-              len(driver.find_elements(By.CSS_SELECTOR, ".admin-row")) >= 2)
-        check("статистика админки",
-              all(b.strip() and b.strip() != "…" for b in
-                  [x.text for x in driver.find_elements(By.CSS_SELECTOR, ".astat b")]))
-        check("кнопки бана видны",
-              len(driver.find_elements(By.CSS_SELECTOR, ".admin-row [data-ban]")) >= 2)
-        shot(driver, "24-admin")
+        check("кнопка удаления чужого видео",
+              len(driver.find_elements(By.CSS_SELECTOR, ".post [data-del]")) >= 1)
+        shot(driver, "24-admfeed")
+
+        # профиль человека: щит рядом с аватаркой -> меню бана
+        driver.get(BASE + "/#/profile/" + U)
+        wait(driver, ".prof-user", 25)
+        check("кнопка админа рядом с аватаркой",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-adm]")) == 1)
+        WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-adm]")))
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, "[data-adm]").click()
+        wait(driver, ".sheet [data-b]", 12)
+        check("меню: бан навсегда/на срок",
+              len(driver.find_elements(By.CSS_SELECTOR, ".sheet [data-b]")) >= 3)
+        check("меню: запрет публикаций",
+              len(driver.find_elements(By.CSS_SELECTOR, ".sheet [data-p]")) >= 2)
+        shot(driver, "25-admprofile")
+
+        # бан на 24 часа через меню
+        WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, '.sheet [data-b="24"]')))
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, '.sheet [data-b="24"]').click()
+        wait(driver, ".modal [data-yes]", 12)
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-yes]").click()
+        time.sleep(2.5)
+        WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-adm]")))
+        time.sleep(0.5)
+        driver.find_element(By.CSS_SELECTOR, "[data-adm]").click()
+        wait(driver, '.sheet [data-b="unban"]', 12)
+        check("бан применился (появилась «Разбанить»)",
+              len(driver.find_elements(By.CSS_SELECTOR, '.sheet [data-b="unban"]')) == 1)
+        # снимаем бан обратно
+        WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, '.sheet [data-b="unban"]')))
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, '.sheet [data-b="unban"]').click()
+        wait(driver, ".modal [data-yes]", 12)
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-yes]").click()
+        time.sleep(2.5)
+        check("блокировка снята",
+              len(driver.find_elements(By.CSS_SELECTOR, '[data-adm]')) == 1)
 
         driver.get(BASE + "/#/chats")
         time.sleep(1)
