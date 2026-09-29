@@ -111,6 +111,13 @@ def main():
         check("лента показывает посты", len(posts) >= 3, len(posts))
         check("в ленте есть действия (лайк/коммент)",
               len(driver.find_elements(By.CSS_SELECTOR, ".post [data-like]")) >= 3)
+        check("медиа занимает весь экран",
+              driver.execute_script(
+                  "return getComputedStyle(document.querySelector('.post .media')).objectFit") == "cover")
+        check("текст звука анимируется в ноту",
+              "sndroll" in driver.execute_script(
+                  "var m=document.querySelector('.post .snd .marq');"
+                  "return m ? getComputedStyle(m).animationName : ''"))
         shot(driver, "03-feed")
 
         # лайк
@@ -165,6 +172,8 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "#tabbar .tab[data-tab=chats]").click()
         time.sleep(1.2)
         check("экран общения", len(driver.find_elements(By.CSS_SELECTOR, ".topbar .searchbar")) == 1)
+        check("фильтры групп/каналов убраны",
+              len(driver.find_elements(By.CSS_SELECTOR, ".srch-tabs")) == 0)
         shot(driver, "07-chats")
 
         # поиск людей

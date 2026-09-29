@@ -58,15 +58,16 @@ async function refreshChatList() {
   }
   if (Chats.paint) { Chats.paint(); return; }
   const host = $('[data-chatlist]');
-  if (host) host.innerHTML = Chats.list.length ? Chats.list.map(chatRow).join('') : chatListEmpty();
+  const onlyDm = (Chats.list || []).filter(c => c.type === 'dm');
+  if (host) host.innerHTML = onlyDm.length ? onlyDm.map(chatRow).join('') : chatListEmpty();
   bindChatRows();
 }
 
 function chatListEmpty() {
   return `<div class="chat-empty">
     <div style="font-size:46px">💬</div>
-    <div style="font-weight:700;color:var(--text)">Пока нет переписок</div>
-    <div>Найдите людей, группы и каналы через поиск выше<br>или создайте своё сообщество</div>
+    <div style="font-weight:700;color:var(--text)">Пока нет личных переписок</div>
+    <div>Найдите человека через поиск выше и напишите ему</div>
   </div>`;
 }
 
@@ -114,30 +115,18 @@ views.chats = async function (screen) {
     </div>
     <div data-results></div>
     <div data-listwrap>
-      <div class="srch-tabs">
-        <span class="pill on" data-f="all">Все</span>
-        <span class="pill" data-f="dm">💬 Личные</span>
-        <span class="pill" data-f="group">👥 Группы</span>
-        <span class="pill" data-f="channel">📢 Каналы</span>
-      </div>
       <div data-chatlist>${chatListEmpty()}</div>
     </div>
     <div style="height:30px"></div>`;
 
-  let filter = 'all';
   const paintList = () => {
     const host = $('[data-chatlist]', screen);
     if (!host) return;
-    const items = filter === 'all' ? Chats.list : Chats.list.filter(c => c.type === filter);
+    const items = Chats.list.filter(c => c.type === 'dm');
     host.innerHTML = items.length ? items.map(chatRow).join('') : chatListEmpty();
     bindChatRows();
   };
   Chats.paint = paintList;
-  $$('[data-f]', screen).forEach(p => p.onclick = () => {
-    filter = p.dataset.f;
-    $$('[data-f]', screen).forEach(x => x.classList.toggle('on', x === p));
-    paintList();
-  });
 
   await Chats.loadList();
   paintList();

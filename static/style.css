@@ -97,7 +97,7 @@ textarea.field{resize:none;min-height:90px}
 .feed::-webkit-scrollbar{display:none}
 .post{position:relative;height:100%;width:100%;scroll-snap-align:start;scroll-snap-stop:always;overflow:hidden;
   background:#000;display:flex;align-items:center;justify-content:center}
-.post .media{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.post .media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
 .post .shade{position:absolute;inset:0;pointer-events:none;
   background:linear-gradient(to bottom,rgba(0,0,0,.55) 0%,transparent 22%,transparent 55%,rgba(0,0,0,.75) 100%)}
 .feed-top{position:absolute;top:calc(10px + env(safe-area-inset-top));left:0;right:0;z-index:14;
@@ -130,10 +130,16 @@ textarea.field{resize:none;min-height:90px}
 .meta{position:absolute;left:12px;right:78px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:12}
 .meta .nick{font-weight:700;font-size:16px;margin-bottom:6px;display:flex;gap:8px;align-items:center}
 .meta .cap{font-size:14px;line-height:1.35;margin-bottom:9px;word-break:break-word;
-  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .meta .snd{display:flex;align-items:center;gap:7px;font-size:13px;opacity:.92;overflow:hidden;white-space:nowrap}
-.meta .snd .marq{display:inline-block;animation:marq 9s linear infinite}
-@keyframes marq{0%{transform:translateX(0)}100%{transform:translateX(-60%)}}
+/* текст про звук «входит» в иконку ноты, пропадает и появляется снова */
+.meta .snd .marq{display:inline-block;transform-origin:left center;
+  animation:sndroll 7s ease-in-out infinite;will-change:transform,opacity}
+@keyframes sndroll{
+  0%,42%{transform:translateX(0) scale(1);opacity:1}
+  56%,70%{transform:translateX(-45%) scale(.18);opacity:0}
+  84%,100%{transform:translateX(0) scale(1);opacity:1}
+}
 .paused{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:56px;opacity:0;
   z-index:13;transition:.15s;pointer-events:none;filter:drop-shadow(0 3px 12px rgba(0,0,0,.7))}
 .paused.show{opacity:.9}
@@ -396,7 +402,8 @@ html[data-theme=light] .stat{background:#fff}
 .follow-chip.done{background:rgba(255,255,255,.2);box-shadow:none}
 .meta .snd{gap:8px}
 .meta .snd .ic{display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;
-  background:rgba(255,255,255,.15);border-radius:7px;font-size:13px;flex:none}
+  background:rgba(255,255,255,.18);border-radius:7px;font-size:13px;flex:none;
+  position:relative;z-index:2;backdrop-filter:blur(6px)}
 .prog{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.22);z-index:14}
 .prog i{display:block;height:100%;width:0;background:#fff;box-shadow:0 0 8px rgba(255,255,255,.6)}
 .post .media{-webkit-user-select:none;user-select:none}

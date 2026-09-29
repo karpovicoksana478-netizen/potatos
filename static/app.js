@@ -260,6 +260,25 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
+const ASSET_V = '7';
+
+/* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
+async function ensureView(name) {
+  if (views[name]) return true;
+  if (!/^[a-z][a-z0-9]*$/.test(name)) return false;
+  const key = 'potatos_js_' + name;
+  if (sessionStorage.getItem(key)) return !!views[name];
+  sessionStorage.setItem(key, '1');
+  await new Promise(res => {
+    const s = document.createElement('script');
+    s.src = `/static/${name}.js?v=${ASSET_V}`;
+    s.onload = () => res();
+    s.onerror = () => res();
+    document.head.appendChild(s);
+  });
+  return !!views[name];
+}
+
 async function render() {
   const r = parseHash();
   App.route = r;
@@ -279,6 +298,13 @@ async function render() {
   if (!App.me) await loadMe();
   if (!App.me) { location.hash = '#/auth'; return; }
 
+  if (!views[r.name] && r.name !== 'home') await ensureView(r.name);
+  if (!views[r.name] && r.name !== 'home') {
+    toast('Раздел не загрузился — обновите страницу (F5)');
+    navigate('#/home');
+    return;
+  }
+
   const view = views[r.name] || views.home;
   screen.scrollTop = 0;
   screen.innerHTML = '';
@@ -287,7 +313,10 @@ async function render() {
   const activeTab = ['profile', 'settings', 'edit'].includes(r.name) ? 'profile' : r.name;
   if (noNav) hideTabbar(); else renderTabbar(activeTab);
   try { await view(screen, r); }
-  catch (e) { console.error(e); if (e && e.status === 404) navigate('#/home'); }
+  catch (e) {
+    console.error(e);
+    if (e && e.status === 404) { toast('Раздел временно недоступен'); navigate('#/home'); }
+  }
 }
 
 /* ---------------- websocket ---------------- */

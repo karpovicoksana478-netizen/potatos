@@ -1,4 +1,4 @@
-const CACHE = 'potatos-v5';
+const CACHE = 'potatos-v6';
 const ASSETS = [
   '/', '/static/style.css', '/static/app.js', '/static/feed.js',
   '/static/chats.js', '/static/profile.js', '/static/admin.js',
@@ -58,9 +58,17 @@ self.addEventListener('fetch', e => {
   } else if (url.pathname.startsWith('/media/')) {
     e.respondWith(cacheFirst(req).catch(() => Response.error()));
   } else {
+    // страницы/сам шелл: сначала сеть (всегда свежий код), офлайн — из кэша
     e.respondWith(
-      staleWhileRevalidate(req).catch(() =>
-        (req.mode === 'navigate' ? caches.match('/') : null).then(r => r || Response.error()))
+      fetch(req).then(res => {
+        if (res && res.ok && res.type === 'basic') {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(req, clone));
+        }
+        return res;
+      }).catch(() =>
+        caches.match(req).then(c => c || (req.mode === 'navigate' ? caches.match('/') : null))
+          .then(r => r || Response.error()))
     );
   }
 });

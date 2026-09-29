@@ -299,7 +299,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=6" in c.get("/").text and "admin.js" in c.get("/").text)
+    check("shell bumped", "v=7" in c.get("/").text and "admin.js" in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
