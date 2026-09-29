@@ -152,7 +152,7 @@ def main():
 
         # профиль
         driver.find_element(By.CSS_SELECTOR, "#tabbar .tab[data-tab=profile]").click()
-        time.sleep(1.5)
+        wait(driver, ".prof-user", 20)
         check("профиль открыт", driver.find_element(By.CSS_SELECTOR, ".prof-user").text == "@" + U)
         check("сетка видео", len(driver.find_elements(By.CSS_SELECTOR, ".gcell")) >= 3)
         shot(driver, "05-profile")
