@@ -106,61 +106,6 @@ def video_frame(media_rel: str):
             return None
 
 
-# фильтры из редактора (совпадают с пресетами в feed.js)
-FILTERS = {
-    "vivid": "eq=contrast=1.15:saturation=1.55:brightness=0.02",
-    "warm": "colorbalance=rs=.10:gs=.03:bs=-.08,eq=saturation=1.12",
-    "cold": "colorbalance=rs=-.08:bs=.10,eq=saturation=1.05",
-    "bw": "hue=s=0",
-    "vintage": ("curves=r='0/0.06 0.5/0.46 1/0.92':b='0/0.10 0.5/0.50 1/0.96',"
-                "eq=saturation=0.72:contrast=1.05"),
-    "fade": "curves=all='0/0.08 0.5/0.5 1/0.94',eq=saturation=0.85",
-}
-
-
-def edit_video(media_rel: str, t0: float = 0.0, t1: float = 0.0, filt: str = "") -> str:
-    """Обрезка по времени + фильтр из редактора. Возвращает новый путь вида videos/...
-
-    Если менять нечего (или ffmpeg не справился) — возвращается исходный файл.
-    """
-    filt = str(filt or "").strip()
-    if not str(media_rel).startswith("videos/"):
-        return media_rel
-    fexpr = FILTERS.get(filt, "")
-    t0 = max(0.0, float(t0 or 0))
-    t1 = float(t1 or 0)
-    do_trim = t0 > 0 or t1 > 0
-    if not do_trim and not fexpr:
-        return media_rel
-    src = os.path.join(db.MEDIA, media_rel)
-    if not os.path.isfile(src):
-        return media_rel
-    with tempfile.TemporaryDirectory() as d:
-        out = os.path.join(d, "out.mp4")
-        args = ["-i", src]
-        if do_trim:
-            dur, _ = _probe(src)
-            if dur > 0:
-                end = dur if (t1 <= 0 or t1 > dur) else t1
-                if end - t0 >= MIN_CLIP:
-                    args += ["-ss", f"{t0:.3f}", "-to", f"{end:.3f}"]
-        if fexpr:
-            args += ["-vf", fexpr]
-        args += VIDEO_ARGS + AUDIO_ARGS + ["-movflags", "+faststart", out]
-        try:
-            _run(args)
-        except HTTPException:
-            print("edit_video: не удалось обработать, публикуем оригинал")
-            return media_rel
-        new_rel = "videos/" + secrets.token_hex(12) + ".mp4"
-        shutil.move(out, os.path.join(db.MEDIA, new_rel))
-    try:
-        os.remove(src)
-    except OSError:
-        pass
-    return new_rel
-
-
 def burn_overlay(media_rel: str, png: bytes) -> str:
     """Накладывает рисунок (PNG с прозрачностью) поверх видео, как нарисовали карандашом.
 

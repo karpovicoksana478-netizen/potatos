@@ -303,9 +303,8 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "[data-clearq]").click()
         time.sleep(0.5)
 
-        # редактор: фото -> сразу редактор (фильтр, карандаш, текст) -> публикация
+        # выкладывание: фото -> превью -> рисунок -> публикация (без редактора)
         import os as _os
-        import subprocess as _sp
         import tempfile as _tf
         edjpg = _os.path.join(_tf.gettempdir(), "potatos-ed.jpg")
         Image.new("RGB", (900, 1600), (120, 180, 255)).save(edjpg, "JPEG")
@@ -315,26 +314,10 @@ def main():
               len(driver.find_elements(By.CSS_SELECTOR, "[data-m=edit]")) == 0)
         driver.execute_script("var i=document.querySelector('#f-photo'); i.hidden=false;")
         driver.find_element(By.CSS_SELECTOR, "#f-photo").send_keys(edjpg)
-        wait(driver, ".editor .ed-media", 15)
-        check("редактор открылся сразу", len(driver.find_elements(By.CSS_SELECTOR, ".editor")) == 1)
-        check("инструменты: фильтры, рисунок, текст",
-              len(driver.find_elements(By.CSS_SELECTOR, ".editor [data-et]")) == 3)
-        check("обрезки для фото нет",
-              len(driver.find_elements(By.CSS_SELECTOR, '.editor [data-et="trim"]')) == 0)
-
-        # фильтр
-        driver.find_element(By.CSS_SELECTOR, '.editor [data-et="filter"]').click()
-        time.sleep(0.4)
-        check("пресеты фильтров",
-              len(driver.find_elements(By.CSS_SELECTOR, ".ed-panel .fchip")) == 7)
-        driver.find_element(By.CSS_SELECTOR, '.fchip[data-f="bw"]').click()
-        time.sleep(0.3)
-        check("фильтр применён к превью", "grayscale" in driver.execute_script(
-            "return getComputedStyle(document.querySelector('.ed-media')).filter"))
-        shot(driver, "21-editor")
-
-        # карандаш
-        driver.find_element(By.CSS_SELECTOR, '.editor [data-et="draw"]').click()
+        wait(driver, "[data-preview]:not([hidden]) img.preview", 15)
+        check("фото в превью", len(driver.find_elements(
+            By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
+        driver.find_element(By.CSS_SELECTOR, "[data-draw]").click()
         wait(driver, ".draw-modal canvas", 10)
         check("окно рисования", len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal canvas")) == 1)
         check("палитра карандаша", len(driver.find_elements(By.CSS_SELECTOR, ".draw-color")) >= 6)
@@ -354,26 +337,6 @@ def main():
             lambda d: len(d.find_elements(By.CSS_SELECTOR, ".draw-modal")) == 0)
         check("окно рисования закрылось",
               len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal")) == 0)
-
-        # текст поверх фото
-        driver.find_element(By.CSS_SELECTOR, '.editor [data-et="text"]').click()
-        wait(driver, ".draw-modal [data-txt]", 10)
-        check("окно текста", len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal [data-txt]")) == 1)
-        driver.find_element(By.CSS_SELECTOR, ".draw-modal [data-txt]").send_keys("привет, potatos!")
-        time.sleep(0.3)
-        driver.find_element(By.CSS_SELECTOR, ".draw-modal [data-ok]").click()
-        WebDriverWait(driver, 15).until(
-            lambda d: len(d.find_elements(By.CSS_SELECTOR, ".draw-modal")) == 0)
-        check("текст наложен", True)
-
-        # «Далее» -> экран публикации
-        WebDriverWait(driver, 12).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-ednext]")))
-        driver.find_element(By.CSS_SELECTOR, "[data-ednext]").click()
-        wait(driver, "[data-preview]:not([hidden]) img.preview", 15)
-        check("редактор закрылся", len(driver.find_elements(By.CSS_SELECTOR, ".editor")) == 0)
-        check("фото в превью", len(driver.find_elements(
-            By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
         driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("нарисовано карандашом")
         driver.execute_script("document.querySelector('[data-publish]').scrollIntoView({block:'center'})")
         time.sleep(0.8)
@@ -382,7 +345,7 @@ def main():
         check("фото опубликовано",
               driver.execute_script("return location.hash") == "#/home")
 
-        # видео: редактор с обрезкой и фильтром -> публикация
+        # видеофайл: превью сразу (без редактора)
         ff = None
         try:
             import imageio_ffmpeg
@@ -392,6 +355,7 @@ def main():
         mp4 = _os.path.join(_tf.gettempdir(), "potatos-v.mp4")
         made = False
         if ff:
+            import subprocess as _sp
             _sp.run([ff, "-hide_banner", "-y", "-f", "lavfi", "-i",
                      "testsrc=duration=2:size=320x240:rate=15",
                      "-c:v", "libx264", "-pix_fmt", "yuv420p", mp4],
@@ -404,46 +368,18 @@ def main():
             time.sleep(0.3)
             driver.execute_script("var i=document.querySelector('#f-video'); i.hidden=false;")
             driver.find_element(By.CSS_SELECTOR, "#f-video").send_keys(mp4)
-            wait(driver, ".editor .ed-media", 20)
-            check("редактор видео открылся",
-                  len(driver.find_elements(By.CSS_SELECTOR, ".editor video")) == 1)
-            WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, '.editor [data-et="trim"]')))
-            driver.find_element(By.CSS_SELECTOR, '.editor [data-et="trim"]').click()
-            time.sleep(0.5)
-            check("панель обрезки",
-                  len(driver.find_elements(By.CSS_SELECTOR, ".ed-panel [data-t0]")) == 1
-                  and len(driver.find_elements(By.CSS_SELECTOR, ".ed-panel [data-t1]")) == 1)
-            # ждём, пока редактор узнает длительность ролика
-            WebDriverWait(driver, 15).until(lambda d: float(
-                d.find_element(By.CSS_SELECTOR, ".ed-panel [data-t1]").get_attribute("max") or 0) >= 1.5)
-            driver.execute_script("""
-              const a=document.querySelector('.ed-panel [data-t0]'),
-                    b=document.querySelector('.ed-panel [data-t1]');
-              a.value=0.4; a.dispatchEvent(new Event('input'));
-              b.value=1.4; b.dispatchEvent(new Event('input'));
-            """)
-            time.sleep(0.3)
-            check("время обрезки записано", driver.execute_script(
-                "return document.querySelector('.ed-panel [data-t1lab]').textContent") == "0:01")
-            driver.find_element(By.CSS_SELECTOR, '.editor [data-et="filter"]').click()
-            time.sleep(0.3)
-            driver.find_element(By.CSS_SELECTOR, '.fchip[data-f="vivid"]').click()
-            time.sleep(0.3)
-            shot(driver, "22-editor-video")
-            driver.find_element(By.CSS_SELECTOR, "[data-ednext]").click()
-            wait(driver, "[data-preview]:not([hidden]) video", 15)
-            check("видео в превью после редактора",
+            wait(driver, "[data-preview]:not([hidden]) video", 25)
+            check("видео в превью без редактора",
                   len(driver.find_elements(By.CSS_SELECTOR, "[data-preview]:not([hidden]) video")) == 1)
-            driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("обрезано в редакторе")
+            driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("видео как раньше")
             driver.execute_script("document.querySelector('[data-publish]').scrollIntoView({block:'center'})")
             time.sleep(0.6)
             driver.find_element(By.CSS_SELECTOR, "[data-publish]").click()
             wait_hash(driver, "#/home", 45)
-            check("видео опубликовано из редактора",
+            check("видео опубликовано",
                   driver.execute_script("return location.hash") == "#/home")
         else:
-            print("  SKIP: ffmpeg нет — видео-редактор не проверяем")
+            print("  SKIP: ffmpeg нет — загрузку видео не проверяем")
 
         # эфир: камера -> запись -> публикация (видео!)
         driver.get(BASE + "/#/plus")
@@ -459,13 +395,6 @@ def main():
             lambda d: d.find_elements(By.CSS_SELECTOR, "[data-livebar]:not([hidden])") != [])
         check("идёт запись эфира", driver.find_elements(By.CSS_SELECTOR, "[data-livebar]:not([hidden])") != [])
         driver.find_element(By.CSS_SELECTOR, "[data-camstop]").click()
-        wait(driver, ".editor", 25)
-        check("редактор открылся для эфира",
-              len(driver.find_elements(By.CSS_SELECTOR, ".editor")) == 1)
-        WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-ednext]")))
-        time.sleep(0.4)
-        driver.find_element(By.CSS_SELECTOR, "[data-ednext]").click()
         wait(driver, "[data-preview]:not([hidden]) video", 25)
         check("превью эфира готово", driver.find_elements(By.CSS_SELECTOR, "[data-preview]:not([hidden]) video") != [])
         driver.find_element(By.CSS_SELECTOR, "[data-caption]").send_keys("мой первый эфир")

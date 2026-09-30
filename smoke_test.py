@@ -176,40 +176,6 @@ def main():
             data={"caption": "пустой рисунок"}).json()
         check("bad draw ignored", bad_draw.get("kind") == "video", bad_draw)
 
-        # редактор: обрезка + фильтр одним запросом на публикацию
-        trimmed = c.post(
-            "/api/upload", headers=ha,
-            files={"file": ("v.mp4", blob, "video/mp4")},
-            data={"caption": "обрезано и в ч/б", "filter": "bw",
-                  "t0": "0.4", "t1": "1.4"}).json()
-        check("editor upload", trimmed.get("media", "").startswith("videos/"), trimmed)
-        vpath = os.path.join(tmp, "edited.mp4")
-        open(vpath, "wb").write(c.get("/media/" + trimmed["media"]).content)
-        pr = subprocess.run([ff, "-hide_banner", "-i", vpath], capture_output=True, timeout=60)
-        out = (pr.stderr or b"").decode("utf-8", "ignore")
-        dur = -1.0
-        if "Duration:" in out:
-            try:
-                hh, mm, ss = out.split("Duration:")[1].split(",")[0].strip().split(":")
-                dur = int(hh) * 3600 + int(mm) * 60 + float(ss)
-            except Exception:
-                pass
-        check("editor trim applied", 0.6 <= dur <= 1.7, dur)
-        fr = os.path.join(tmp, "frame.png")
-        subprocess.run([ff, "-hide_banner", "-y", "-i", vpath, "-frames:v", "1", fr],
-                       capture_output=True, timeout=60)
-        from PIL import Image as _Im
-        _im = _Im.open(fr).convert("RGB")
-        _sp = []
-        for _x in range(0, _im.width, 17):
-            for _y in range(0, _im.height, 17):
-                _r, _g, _b = _im.getpixel((_x, _y))
-                _sp.append(max(_r, _g, _b) - min(_r, _g, _b))
-        _sp.sort()
-        check("editor bw filter applied",
-              bool(_sp) and _sp[len(_sp) // 2] <= 12, _sp[len(_sp) // 2] if _sp else None)
-        check("editor thumb from frame",
-              trimmed.get("thumb", "").startswith("thumbs/"), trimmed)
     else:
         print("  SKIP edit tests (ffmpeg недоступен)")
 
@@ -348,7 +314,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=9" in c.get("/").text and "admin.js" not in c.get("/").text)
+    check("shell bumped", "v=10" in c.get("/").text and "admin.js" not in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
