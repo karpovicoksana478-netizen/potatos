@@ -419,10 +419,10 @@ def main():
         check("живой эфир помечен", len(driver.find_elements(By.CSS_SELECTOR, ".post .live-tag")) >= 1)
         shot(driver, "13-live")
 
-        # уведомления: второй лайкует, комментирует и пишет в лс -> точки на вкладках
+        # «Активность»: второй лайкует и комментирует -> чат в «Общении», точек уведомлений нет
         feed_api = c.get("/api/feed", headers=h).json()
         mine_post = next((p for p in feed_api["items"] if p["user"]["username"] == U), None)
-        check("свой пост найден для уведомлений", bool(mine_post))
+        check("свой пост найден для активности", bool(mine_post))
         c.post(f"/api/video/{mine_post['id']}/like", headers=h2)
         c.post(f"/api/video/{mine_post['id']}/comments", headers=h2, data={"text": "nice!"})
         dm2 = c.post("/api/chats/dm", headers=h2, json={"username": U}).json()
@@ -432,33 +432,51 @@ def main():
         wait(driver, "#tabbar .tab", 20)
         try:
             WebDriverWait(driver, 20).until(lambda d: d.find_element(
-                By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
-            WebDriverWait(driver, 20).until(lambda d: d.find_element(
                 By.CSS_SELECTOR, "#tabbar [data-dot=chats]").is_displayed())
         except Exception:
             pass
-        check("точка уведомлений на «Профиле»",
-              driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
+        check("точка уведомлений убрана",
+              len(driver.find_elements(By.CSS_SELECTOR, "#tabbar [data-dot=notif]")) == 0)
         check("точка непрочитанных на «Общении»",
               driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=chats]").is_displayed())
         shot(driver, "26-badges")
 
         driver.find_element(By.CSS_SELECTOR, '#tabbar .tab[data-tab=profile]').click()
         wait(driver, ".prof-user", 20)
-        check("колокольчик в профиле",
-              len(driver.find_elements(By.CSS_SELECTOR, "[data-notifs]")) == 1)
-        driver.find_element(By.CSS_SELECTOR, "[data-notifs]").click()
-        wait_hash(driver, "#/notifs", 10)
-        wait(driver, ".nrow", 15)
-        ntxt = driver.find_element(By.CSS_SELECTOR, "[data-list]").text
-        check("экран уведомлений", len(driver.find_elements(By.CSS_SELECTOR, ".nrow")) >= 3, ntxt)
-        check("в уведомлениях есть лайк", "понравился" in ntxt, ntxt)
-        check("в уведомлениях есть лс", "привет из теста" in ntxt, ntxt)
-        shot(driver, "27-notifs")
-        driver.find_element(By.CSS_SELECTOR, "[data-all]").click()
-        time.sleep(1)
-        check("точка погасла после «Прочитать»",
-              not driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
+        check("колокольчик убран из профиля",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-notifs]")) == 0)
+
+        # чат «Активность» внутри раздела «Общение»
+        driver.find_element(By.CSS_SELECTOR, '#tabbar .tab[data-tab=chats]').click()
+        wait(driver, "[data-chatlist] .chat-row", 20)
+        rows = driver.find_elements(By.CSS_SELECTOR, "[data-chatlist] .chat-row")
+        act_rows = [r for r in rows if "Активность" in r.text]
+        check("строка «Активность» в списке чатов", len(act_rows) == 1,
+              [r.text for r in rows])
+        check("в строке активности есть счётчик",
+              len(act_rows) == 1 and act_rows[0].find_elements(By.CSS_SELECTOR, ".cnt") != [],
+              act_rows[0].text if act_rows else "")
+        act_rows[0].click()
+        wait(driver, ".msg.act", 15)
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: "лайкнул" in d.find_element(By.CSS_SELECTOR, ".msgs").text)
+        except Exception:
+            pass
+        atxt = driver.find_element(By.CSS_SELECTOR, ".msgs").text
+        check("в активности есть лайк", "лайкнул" in atxt, atxt)
+        check("в активности есть комментарий", "прокомментировал" in atxt, atxt)
+        check("композер в активности скрыт",
+              driver.find_element(By.CSS_SELECTOR, "[data-composer]").is_displayed() is False)
+        shot(driver, "27-activity")
+        driver.find_element(By.CSS_SELECTOR, "[data-back]").click()
+        wait_hash(driver, "#/chats", 10)
+        wait(driver, "[data-chatlist] .chat-row", 10)
+        act_rows2 = [r for r in driver.find_elements(By.CSS_SELECTOR, "[data-chatlist] .chat-row")
+                     if "Активность" in r.text]
+        check("после чтения счётчик погас",
+              len(act_rows2) == 1 and act_rows2[0].find_elements(By.CSS_SELECTOR, ".cnt") == [],
+              act_rows2[0].text if act_rows2 else "")
 
         # жалоба на чужой пост из ленты
         driver.get(BASE + "/#/home")
@@ -527,8 +545,9 @@ def main():
         check("кнопки уведомлений и данных в настройках",
               len(driver.find_elements(By.CSS_SELECTOR, "[data-push]")) == 1
               and len(driver.find_elements(By.CSS_SELECTOR, "[data-export]")) == 1
-              and len(driver.find_elements(By.CSS_SELECTOR, "[data-del]")) == 1
-              and len(driver.find_elements(By.CSS_SELECTOR, "[data-opennotifs]")) == 1)
+              and len(driver.find_elements(By.CSS_SELECTOR, "[data-del]")) == 1)
+        check("экран уведомлений в настройках убран",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-opennotifs]")) == 0)
         check("жалобы скрыты от обычного юзера",
               len(driver.find_elements(By.CSS_SELECTOR, "[data-reports]")) == 0)
 

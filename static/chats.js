@@ -24,7 +24,9 @@ const Chats = {
   onEvent: async function (d) {
     if (!d) return;
     if (d.type === 'message') {
-      const c = Chats.find(d.chat_id);
+      let c = Chats.find(d.chat_id);
+      const known = !!c;
+      if (!c) { await Chats.loadList(); c = Chats.find(d.chat_id); }   // новый чат (например, «Активность»)
       if (c) { c.last = { id: d.message.id, text: d.message.text, kind: d.message.kind, created_at: d.message.created_at, user_id: d.message.user_id }; }
       if (App.route.name === 'chat' && +App.route.args[0] === d.chat_id) {
         ChatView.append(d.message);
@@ -32,7 +34,7 @@ const Chats = {
         const cc = Chats.find(d.chat_id); if (cc) cc.unread = 0;
       } else {
         const cc = Chats.find(d.chat_id);
-        if (cc) cc.unread = (cc.unread || 0) + 1;
+        if (cc && known) cc.unread = (cc.unread || 0) + 1;   // сервер уже посчитал для нового чата
         if (App.route.name === 'chats') refreshChatList();
       }
       syncChatBadge();
@@ -68,7 +70,7 @@ async function refreshChatList() {
   }
   if (Chats.paint) { Chats.paint(); return; }
   const host = $('[data-chatlist]');
-  const onlyDm = (Chats.list || []).filter(c => c.type === 'dm');
+  const onlyDm = (Chats.list || []).filter(c => c.type === 'dm' || c.type === 'activity');
   if (host) host.innerHTML = onlyDm.length ? onlyDm.map(chatRow).join('') : chatListEmpty();
   bindChatRows();
 }
@@ -82,7 +84,8 @@ function chatListEmpty() {
 }
 
 function chatRow(c) {
-  const ic = c.type === 'channel' ? '📢' : (c.type === 'group' ? '👥' : '');
+  const isAct = c.type === 'activity';
+  const ic = c.type === 'channel' ? '📢' : (c.type === 'group' ? '👥' : (isAct ? '🔔' : ''));
   let last = 'Нет сообщений';
   if (c.last) {
     const who = c.last.user_id === (App.me && App.me.id) ? 'Вы: ' : '';
@@ -91,9 +94,9 @@ function chatRow(c) {
       kind === 'sticker' ? (c.last.text || '😀') : (c.last.text || '');
     last = who + body;
   }
-  return `<div class="chat-row" data-chat="${c.id}">
+  return `<div class="chat-row${isAct ? ' act-row' : ''}" data-chat="${c.id}">
     <div style="position:relative;flex:none">
-      ${ava(c.avatar)}
+      ${isAct ? '<div class="ava ava-ph">🔔</div>' : ava(c.avatar)}
       <span class="type-ic">${ic}</span>
     </div>
     <div class="b">
@@ -132,7 +135,7 @@ views.chats = async function (screen) {
   const paintList = () => {
     const host = $('[data-chatlist]', screen);
     if (!host) return;
-    const items = Chats.list.filter(c => c.type === 'dm');
+    const items = Chats.list.filter(c => c.type === 'dm' || c.type === 'activity');
     host.innerHTML = items.length ? items.map(chatRow).join('') : chatListEmpty();
     bindChatRows();
   };
@@ -225,12 +228,13 @@ function msgHTML(m, prev) {
   else if (m.kind === 'video') inner = `<video src="/media/${esc(m.media)}" controls playsinline preload="metadata"></video>`;
   else inner = `<div class="tx">${esc(m.text)}</div>`;
 
-  const showWho = !mine && m.author && m.author.username && prev && prev.user_id !== m.user_id;
+  const showWho = !mine && m.author && m.author.username
+    && (m.kind === 'activity' || (prev && prev.user_id !== m.user_id));
   const day = !prev || !sameDay
     ? `<div class="daysep">${new Date(m.created_at * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}</div>` : '';
 
   return `${day}
-  <div class="msg ${mine ? 'me' : ''}" data-id="${m.id}">
+  <div class="msg ${mine ? 'me' : ''}${m.kind === 'activity' ? ' act' : ''}" data-id="${m.id}">
     ${showWho ? `<div class="who" data-prof style="cursor:pointer">@${esc(m.author.username)}</div>` : ''}
     ${inner}
     <div class="tm">${timeHM(m.created_at)}</div>
@@ -247,19 +251,22 @@ views.chat = async function (screen, r) {
   }
   ChatView.chat = chat;
   const isDM = chat.type === 'dm';
+  const isAct = chat.type === 'activity';
 
   screen.innerHTML = `
   <div class="convo">
     <div class="convo-head">
       <button class="back" data-back>←</button>
-      <div data-hava style="flex:none;cursor:pointer">${ava(chat.avatar, 'sm')}</div>
+      <div data-hava style="flex:none;cursor:pointer">${isAct
+        ? '<div class="ava ava-ph" style="width:34px;height:34px">🔔</div>' : ava(chat.avatar, 'sm')}</div>
       <div class="info" data-info style="cursor:pointer">
         <div class="n">${esc(chat.title || 'Чат')} ${chat.type === 'channel' ? '📢' : chat.type === 'group' ? '👥' : ''}</div>
         <div class="s">${chat.type === 'channel' ? subs(chat.members_count)
         : chat.type === 'group' ? people(chat.members_count)
+          : isAct ? 'лайки, подписки, комментарии'
           : (chat.peer ? '@' + esc(chat.peer.username) : '')}</div>
       </div>
-      <button class="back" data-menu style="font-size:18px">⋯</button>
+      <button class="back" data-menu style="font-size:18px">${isAct ? 'ⓘ' : '⋯'}</button>
     </div>
     <div class="msgs" data-msgs></div>
     <div class="typing" data-typing hidden></div>
@@ -309,7 +316,9 @@ views.chat = async function (screen, r) {
     }).catch(() => { });
   }
 
-  /* удаление сообщения: долгое нажатие / правая кнопка */
+  if (isAct) $('[data-composer]', el).hidden = true;
+
+  /* удаление сообщения: долгое нажатие / правая кнопка (в «Активности» — нельзя) */
   const canDeleteAny = chat.role === 'owner' || chat.role === 'admin';
   let lpTimer = null;
   const cancelLP = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
@@ -329,29 +338,43 @@ views.chat = async function (screen, r) {
       } catch (e) { }
     }, 'Удалить');
   };
-  msgsEl.addEventListener('pointerdown', e => {
-    const m = e.target.closest('.msg');
-    if (!m || !e.isPrimary) return;
-    cancelLP();
-    lpTimer = setTimeout(() => { lpTimer = null; tryDelete(+m.dataset.id); }, 520);
-  });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => msgsEl.addEventListener(ev, cancelLP));
-  msgsEl.addEventListener('scroll', cancelLP, { passive: true });
-  msgsEl.addEventListener('contextmenu', e => {
-    const m = e.target.closest('.msg');
-    if (!m) return;
-    e.preventDefault();
-    cancelLP();
-    tryDelete(+m.dataset.id);
-  });
+  if (!isAct) {
+    msgsEl.addEventListener('pointerdown', e => {
+      const m = e.target.closest('.msg');
+      if (!m || !e.isPrimary) return;
+      cancelLP();
+      lpTimer = setTimeout(() => { lpTimer = null; tryDelete(+m.dataset.id); }, 520);
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => msgsEl.addEventListener(ev, cancelLP));
+    msgsEl.addEventListener('scroll', cancelLP, { passive: true });
+    msgsEl.addEventListener('contextmenu', e => {
+      const m = e.target.closest('.msg');
+      if (!m) return;
+      e.preventDefault();
+      cancelLP();
+      tryDelete(+m.dataset.id);
+    });
+  }
 
   /* меню чата */
-  $('[data-menu]', el).onclick = () => chatMenu(chat);
-  $('[data-info]', el).onclick = () => chatMenu(chat);
-  $('[data-hava]', el).onclick = () => {
-    if (isDM && chat.peer) navigate('#/profile/' + chat.peer.username);
-    else chatMenu(chat);
-  };
+  const activityInfo = () => sheet('Активность', `
+    <div class="inline-note" style="margin:10px 16px">
+      Сюда приходят события вашего аккаунта: лайки, подписки, комментарии, ответы и
+      упоминания под вашими видео, а также уведомления о личных сообщениях.
+      Писать в этот раздел нельзя — откройте чат с человеком.
+    </div>`);
+  if (isAct) {
+    $('[data-menu]', el).onclick = activityInfo;
+    $('[data-info]', el).onclick = activityInfo;
+    $('[data-hava]', el).onclick = activityInfo;
+  } else {
+    $('[data-menu]', el).onclick = () => chatMenu(chat);
+    $('[data-info]', el).onclick = () => chatMenu(chat);
+    $('[data-hava]', el).onclick = () => {
+      if (isDM && chat.peer) navigate('#/profile/' + chat.peer.username);
+      else chatMenu(chat);
+    };
+  }
 
   /* отправка */
   const send = async () => {

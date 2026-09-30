@@ -108,24 +108,49 @@ def main():
     check("avatar", av["user"]["avatar"].startswith("avatars/"))
     check("user videos", len(c.get(f"/api/user/{U1}/videos").json()["items"]) == 1)
 
-    # --- уведомления: лайк/коммент/упоминание, счётчики, прочтение ---
-    n2 = c.get("/api/notifications", headers=hb).json()
-    kinds2 = [i["kind"] for i in n2["items"]]
-    check("notif: лайк автору", "like" in kinds2 and n2["unread"] >= 1, n2)
-    check("notif: комментарий автору", "comment" in kinds2, kinds2)
-    n1 = c.get("/api/notifications", headers=ha).json()
-    check("notif: про своё не приходит",
-          not any(i["kind"] in ("like", "comment") for i in n1["items"]), n1)
+    # --- «Активность»: события аккаунта приходят чатом в «Общение» ---
+    act_b_l = [x for x in c.get("/api/chats", headers=hb).json()["items"]
+               if x["type"] == "activity"]
+    check("activity: чат есть у hb", len(act_b_l) == 1 and act_b_l[0]["title"] == "Активность",
+          act_b_l)
+    act_b = act_b_l[0]
+    act_a_l = [x for x in c.get("/api/chats", headers=ha).json()["items"]
+               if x["type"] == "activity"]
+    check("activity: чат есть у ha", len(act_a_l) == 1, act_a_l)
+    act_a = act_a_l[0]
+    check("activity: про своё не приходит",
+          len(c.get(f"/api/chats/{act_a['id']}/messages", headers=ha).json()["items"]) == 0)
+    mb = c.get(f"/api/chats/{act_b['id']}/messages", headers=hb).json()["items"]
+    tb = [m["text"] for m in mb]
+    check("activity: лайк автору", any("лайкнул" in t for t in tb), tb)
+    check("activity: комментарий автору", any("прокомментировал" in t for t in tb), tb)
+    check("activity: подписка", any("подписался" in t for t in tb), tb)
+    check("activity: счётчик непрочитанных", act_b["unread"] >= 3, act_b)
     c.post("/api/upload", headers=hb, files={"file": ("men.jpg", png(), "image/jpeg")},
            data={"caption": f"привет @{U1}!"})
-    n1 = c.get("/api/notifications", headers=ha).json()
-    check("notif: упоминание", any(i["kind"] == "mention" for i in n1["items"]), n1)
+    ta = [m["text"] for m in
+          c.get(f"/api/chats/{act_a['id']}/messages", headers=ha).json()["items"]]
+    check("activity: упоминание", any("упомянул" in t for t in ta), ta)
     un = c.get("/api/unread", headers=ha).json()
-    check("unread счётчики", un["notifications"] >= 1 and un["chats"] >= 0, un)
-    c.post("/api/notifications/read", headers=ha, json={})
-    check("notif: прочтение всех", c.get("/api/notifications", headers=ha).json()["unread"] == 0)
-    check("notif: свой пост не попал", len(c.get("/api/notifications", headers=ha)
-                                           .json()["items"]) >= 1)
+    check("unread счётчики", un["chats"] >= 1 and "notifications" not in un, un)
+    check("activity: старый API уведомлений удалён",
+          c.get("/api/notifications", headers=ha).status_code == 404)
+    check("activity: старое API прочтения удалено",
+          c.post("/api/notifications/read", headers=ha, json={}).status_code in (404, 405))
+    check("activity: писать нельзя",
+          c.post(f"/api/chats/{act_a['id']}/send", headers=ha,
+                 data={"text": "тест", "kind": "text"}).status_code == 403)
+    check("activity: выйти нельзя",
+          c.post(f"/api/chats/{act_a['id']}/leave", headers=ha).status_code == 400)
+    check("activity: удалить нельзя",
+          c.delete(f"/api/chats/{act_a['id']}", headers=ha).status_code == 400)
+    check("activity: вступить нельзя",
+          c.post(f"/api/chats/{act_b['id']}/join", headers=ha).status_code == 400)
+    check("activity: прочтение",
+          c.post(f"/api/chats/{act_a['id']}/read", headers=ha).json()["ok"] is True)
+    check("activity: счётчик обнулился",
+          c.get("/api/unread", headers=ha).json() == {"chats": 0},
+          c.get("/api/unread", headers=ha).json())
 
     # --- push: ключ, подписка, отписка ---
     key = c.get("/api/push/public-key").json().get("key", "")
@@ -224,9 +249,8 @@ def main():
 
     msg = c.post(f"/api/chats/{dm['id']}/send", headers=ha, data={"text": "привет!", "kind": "text"}).json()
     check("send dm", msg["text"] == "привет!")
-    ndm = c.get("/api/notifications", headers=hb).json()
-    check("notif: лс собеседнику",
-          any(i["kind"] == "dm" and i["chat_id"] == dm["id"] for i in ndm["items"]), ndm)
+    dm_row = [x for x in c.get("/api/chats", headers=hb).json()["items"] if x["id"] == dm["id"]]
+    check("лс: точка собеседнику", bool(dm_row) and dm_row[0]["unread"] >= 1, dm_row)
     msg2 = c.post(f"/api/chats/{dm['id']}/send", headers=hb, data={"text": "и тебе привет", "kind": "text"}).json()
     check("send reply", msg2["user_id"] != msg["user_id"])
     hist = c.get(f"/api/chats/{dm['id']}/messages", headers=hb).json()["items"]
@@ -348,7 +372,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=11" in c.get("/").text and "admin.js" not in c.get("/").text)
+    check("shell bumped", "v=12" in c.get("/").text and "admin.js" not in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -435,6 +459,8 @@ def main():
     ex = c.get("/api/me/export", headers=ha).json()
     check("me export", ex["profile"]["username"] == U1
           and any(p["caption"] == "первая публикация" for p in ex["posts"]), list(ex.keys()))
+    check("в выгрузке нет уведомлений", "notifications" not in ex, list(ex.keys()))
+    check("в выгрузке есть активность", "activity" in ex, list(ex.keys()))
     check("export needs auth", c.get("/api/me/export").status_code == 401)
     check("delete wrong password",
           c.request("DELETE", "/api/me", headers=ha,

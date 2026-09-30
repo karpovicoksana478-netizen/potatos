@@ -137,17 +137,6 @@ CREATE TABLE IF NOT EXISTS reads (
   last_id INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (chat_id, user_id)
 );
-CREATE TABLE IF NOT EXISTS notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  kind TEXT NOT NULL DEFAULT 'like',
-  post_id INTEGER,
-  chat_id INTEGER,
-  text TEXT NOT NULL DEFAULT '',
-  is_read INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS push_subs (
   endpoint TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -168,7 +157,7 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX IF NOT EXISTS idx_videos_user ON videos(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_video ON comments(video_id, id);
-CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_chats_activity ON chats(type, owner_id);
 """
 
 
@@ -192,6 +181,8 @@ def _migrate():
     ):
         if col not in uhave:
             db().execute(sql)
+    # старые уведомления заменены чатом «Активность»
+    db().execute("DROP TABLE IF EXISTS notifications")
     db().commit()
 
 

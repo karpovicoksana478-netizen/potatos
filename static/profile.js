@@ -65,8 +65,7 @@ views.profile = async function (screen, r) {
     <div class="topbar">
       ${isMe ? '' : '<button class="back" data-back>←</button>'}
       <h1 style="font-size:16px">@${esc(prof.username)}</h1>
-      ${isMe ? `<button class="back" data-notifs style="font-size:15px">🔔<i class="tab-dot" data-dot="notif"${Badges.notif ? '' : ' hidden'}></i></button>
-                <button class="back" data-settings style="font-size:17px">⚙</button>` : ''}
+      ${isMe ? `<button class="back" data-settings style="font-size:17px">⚙</button>` : ''}
     </div>
     <div class="prof-head">
       <div class="ava-box">
@@ -97,7 +96,6 @@ views.profile = async function (screen, r) {
 
   $('[data-back]', screen) && ($('[data-back]', screen).onclick = () => history.back());
   $('[data-settings]', screen) && ($('[data-settings]', screen).onclick = () => navigate('#/settings'));
-  $('[data-notifs]', screen) && ($('[data-notifs]', screen).onclick = () => navigate('#/notifs'));
   $('[data-edit]', screen) && ($('[data-edit]', screen).onclick = () => navigate('#/edit'));
   $('[data-adm]', screen) && ($('[data-adm]', screen).onclick = () => adminUserMenu(prof, adm));
 
@@ -230,66 +228,6 @@ views.edit = async function (screen) {
 };
 
 
-/* ---------------- экран уведомлений ---------------- */
-function notifRow(n) {
-  return `
-  <div class="nrow" data-id="${n.id}" data-kind="${esc(n.kind)}" data-chat="${n.chat_id || ''}">
-    <div class="n-ava">${n.actor ? ava(n.actor.avatar, 'sm') : '<div class="ph">🥔</div>'}</div>
-    <div class="n-b">
-      <div class="n-t">${esc(n.title)}</div>
-      ${n.body ? `<div class="n-x">${esc(n.body)}</div>` : ''}
-      <div class="n-time">${timeAgo(n.created_at)}</div>
-    </div>
-    ${n.is_read ? '' : '<i class="n-unread"></i>'}
-  </div>`;
-}
-
-views.notifs = async function (screen) {
-  if (!requireAuth()) return;
-  screen.innerHTML = `
-    <div class="topbar">
-      <button class="back" data-back>←</button>
-      <h1 style="font-size:16px">Уведомления</h1>
-      <button class="back" data-all style="width:auto;padding:0 10px;font-size:13px">Прочитать</button>
-    </div>
-    <div class="page"><div data-list><div class="loader"><div class="spin"></div></div></div></div>`;
-
-  $('[data-back]', screen).onclick = () => history.length > 1 ? history.back()
-    : navigate('#/profile/' + App.me.username);
-
-  const paint = async () => {
-    let d = { items: [], unread: 0 };
-    try { d = await api('/api/notifications'); } catch (e) { }
-    Badges.setNotif(d.unread || 0);
-    const host = $('[data-list]', screen);
-    if (!host) return;
-    if (!d.items.length) {
-      host.innerHTML = `<div class="notif-empty">
-        <div style="font-size:44px">🔔</div>
-        <b>Пока нет уведомлений</b>
-        <span>Лайки, ответы, упоминания и личные сообщения появятся здесь</span></div>`;
-      return;
-    }
-    host.innerHTML = d.items.map(notifRow).join('');
-    $$('.nrow', host).forEach(r => r.onclick = async () => {
-      const id = +r.dataset.id;
-      try {
-        await api('/api/notifications/read', { method: 'POST', body: { ids: [id] }, silent: true });
-      } catch (e) { }
-      Badges.setNotif(Math.max(0, Badges.notif - 1));
-      if (r.dataset.kind === 'dm' && r.dataset.chat) navigate('#/chat/' + r.dataset.chat);
-      else navigate('#/home');
-    });
-  };
-
-  $('[data-all]', screen).onclick = async () => {
-    try { await api('/api/notifications/read', { method: 'POST', silent: true }); } catch (e) { }
-    Badges.setNotif(0);
-    paint();
-  };
-  await paint();
-};
-
 /* ---------------- настройки и тема ---------------- */
 views.settings = async function (screen) {
   if (!requireAuth()) return;
@@ -314,10 +252,8 @@ views.settings = async function (screen) {
       </div>
 
       <div class="divider"></div>
-      <label class="lbl" style="margin-top:0">Уведомления</label>
-      <button class="btn ghost" data-opennotifs>🔔 Уведомления в приложении</button>
-      <div style="height:10px"></div>
-      <button class="btn ghost" data-push>🔔 Уведомления на телефоне</button>
+      <label class="lbl" style="margin-top:0">Уведомления на телефоне</label>
+      <button class="btn ghost" data-push>🔔 Push-уведомления</button>
 
       <div class="divider"></div>
       <label class="lbl" style="margin-top:0">Аккаунт</label>
@@ -354,7 +290,6 @@ views.settings = async function (screen) {
   });
 
   $('[data-edit]', screen).onclick = () => navigate('#/edit');
-  $('[data-opennotifs]', screen).onclick = () => navigate('#/notifs');
   $('[data-logout]', screen).onclick = () => {
     confirmModal('Выйти из аккаунта?', async () => {
       try { await api('/api/logout', { method: 'POST', silent: true }); } catch (e) { }

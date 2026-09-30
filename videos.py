@@ -3,7 +3,7 @@ import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from . import auth, db, notifs
+from . import activity, auth, db
 
 router = APIRouter(prefix="/api")
 
@@ -138,8 +138,8 @@ async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
     vid = db.run(
         "INSERT INTO videos (user_id, kind, media, thumb, caption, sound, created_at) VALUES (?,?,?,?,?,?,?)",
         (user["id"], kind, media_path, thumb_url, caption.strip()[:500], sound.strip()[:120], db.now()))
-    for m in notifs.mentions(caption):
-        notifs.add(m["id"], "mention", actor=user, post_id=vid, text=caption.strip()[:200])
+    for m in activity.mentions(caption):
+        activity.add(m["id"], "mention", actor=user, post_id=vid, text=caption.strip()[:200])
     v = db.one("SELECT * FROM videos WHERE id=?", (vid,))
     return video_payload(v, user)
 
@@ -185,7 +185,7 @@ def like(vid: int, user=Depends(auth.current_user)):
     else:
         db.run("INSERT INTO likes (user_id, video_id, created_at) VALUES (?,?,?)", (user["id"], vid, db.now()))
         liked = True
-        notifs.add(v["user_id"], "like", actor=user, post_id=vid, text=(v["caption"] or "")[:120])
+        activity.add(v["user_id"], "like", actor=user, post_id=vid, text=(v["caption"] or "")[:120])
     count = db.one("SELECT COUNT(*) c FROM likes WHERE video_id=?", (vid,))["c"]
     return {"liked": liked, "likes": count}
 
@@ -264,14 +264,14 @@ async def add_comment(vid: int,
     snippet = (text or "").strip()[:160] or "📷 Фото"
     notified = set()
     if parent:
-        notifs.add(parent["user_id"], "reply", actor=user, post_id=vid, text=snippet)
+        activity.add(parent["user_id"], "reply", actor=user, post_id=vid, text=snippet)
         notified.add(parent["user_id"])
     if _owner not in notified:
-        notifs.add(_owner, "comment", actor=user, post_id=vid, text=snippet)
+        activity.add(_owner, "comment", actor=user, post_id=vid, text=snippet)
         notified.add(_owner)
-    for m in notifs.mentions(text):
+    for m in activity.mentions(text):
         if m["id"] not in notified and m["id"] != user["id"]:
-            notifs.add(m["id"], "mention", actor=user, post_id=vid, text=snippet)
+            activity.add(m["id"], "mention", actor=user, post_id=vid, text=snippet)
             notified.add(m["id"])
     return {"id": cid, "username": user["username"], "nickname": user["nickname"],
             "avatar": user["avatar"], "text": text[:1000], "media": media,

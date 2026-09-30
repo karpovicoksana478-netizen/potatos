@@ -161,21 +161,17 @@ function requireAuth() {
   return true;
 }
 
-/* ---------------- уведомления: точки на вкладках + звук ---------------- */
+/* ---------------- точка непрочитанных на вкладке «Общение» ---------------- */
 const Badges = {
-  notif: 0, chatUnread: 0,
-  setNotif(n) { this.notif = Math.max(0, n | 0); this.paint(); },
+  chatUnread: 0,
   setChats(n) { this.chatUnread = Math.max(0, n | 0); this.paint(); },
   paint() {
-    const set = (sel, on) => $$(sel).forEach(el => { el.hidden = !on; });
-    set('[data-dot=notif]', this.notif);
-    set('[data-dot=chats]', this.chatUnread);
+    $$('[data-dot=chats]').forEach(el => { el.hidden = !this.chatUnread; });
   },
   async load() {
-    if (!App.token) { this.setNotif(0); this.setChats(0); return; }
+    if (!App.token) { this.setChats(0); return; }
     try {
       const d = await api('/api/unread', { silent: true });
-      this.setNotif(d.notifications);
       this.setChats(d.chats);
     } catch (e) { }
   }
@@ -306,7 +302,6 @@ function renderTabbar(active) {
       inner = `<img class="ava" src="${esc(mediaURL(App.me.avatar))}" onerror="App.avaFail(this)">`;
     let dot = '';
     if (t.id === 'chats') dot = `<i class="tab-dot" data-dot="chats"${Badges.chatUnread ? '' : ' hidden'}></i>`;
-    if (t.id === 'profile') dot = `<i class="tab-dot" data-dot="notif"${Badges.notif ? '' : ' hidden'}></i>`;
     return `<button class="tab${on}" data-tab="${t.id}">${inner}<span>${t.label}</span>${dot}</button>`;
   }).join('');
   $$('.tab', bar).forEach(b => b.onclick = () => {
@@ -318,7 +313,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '11';
+const ASSET_V = '12';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -368,7 +363,7 @@ async function render() {
   screen.innerHTML = '';
   const noNav = ['chat'].includes(r.name);
   screen.classList.toggle('no-nav', noNav);
-  const activeTab = ['profile', 'settings', 'edit', 'notifs'].includes(r.name) ? 'profile' : r.name;
+  const activeTab = ['profile', 'settings', 'edit'].includes(r.name) ? 'profile' : r.name;
   if (noNav) hideTabbar(); else renderTabbar(activeTab);
   try { await view(screen, r); }
   catch (e) {
@@ -395,13 +390,13 @@ function connectWS() {
 
 function handleWSEvent(d) {
   if (window.Chats) Chats.onEvent(d);
-  if (d.type === 'notify') {
-    Badges.setNotif(d.unread);
-    ping();
-    if (d.item && d.item.title) toast(d.item.title);
-  } else if (d.type === 'message') {
-    clearTimeout(Badges._t);
-    Badges._t = setTimeout(() => Badges.load(), 700);
+  if (d.type === 'message' && d.chat && d.chat.type === 'activity') {
+    const openHere = App.route.name === 'chat' && +App.route.args[0] === d.chat_id;
+    if (!openHere) {
+      ping();
+      const who = (d.message && d.message.author && d.message.author.username) || '';
+      toast((who ? '@' + who + ' ' : '') + ((d.message && d.message.text) || 'Активность'));
+    }
   }
 }
 

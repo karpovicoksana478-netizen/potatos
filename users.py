@@ -3,7 +3,7 @@ import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from . import auth, db
+from . import activity, auth, db
 
 router = APIRouter(prefix="/api")
 
@@ -11,12 +11,16 @@ USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.]{3,24}$")
 
 
 def stats(u: dict, me) -> dict:
-    followers = db.one("SELECT COUNT(*) c FROM follows WHERE followee_id=?", (u["id"],))["c"]
-    following = db.one("SELECT COUNT(*) c FROM follows WHERE follower_id=?", (u["id"],))["c"]
-    videos = db.one("SELECT COUNT(*) c FROM videos WHERE user_id=?", (u["id"],))["c"]
-    likes = db.one("SELECT COUNT(*) c FROM likes l JOIN videos v ON v.id=l.video_id WHERE v.user_id=?",
-                   (u["id"],))["c"]
-    out = {"followers": followers, "following": following, "videos": videos, "likes": likes}
+    """Все счётчики профиля одним запросом (раньше — четыре)."""
+    r = db.one(
+        "SELECT "
+        "(SELECT COUNT(*) FROM follows WHERE followee_id=?) followers, "
+        "(SELECT COUNT(*) FROM follows WHERE follower_id=?) following, "
+        "(SELECT COUNT(*) FROM videos WHERE user_id=?) videos, "
+        "(SELECT COUNT(*) FROM likes l JOIN videos v ON v.id=l.video_id WHERE v.user_id=?) likes",
+        (u["id"], u["id"], u["id"], u["id"]))
+    out = {"followers": r["followers"], "following": r["following"],
+           "videos": r["videos"], "likes": r["likes"]}
     out["followed"] = False
     out["is_me"] = bool(me and me["id"] == u["id"])
     if me and not out["is_me"]:
@@ -48,6 +52,7 @@ def register(body: dict):
         "INSERT INTO users (username, nickname, password, device_id, created_at) VALUES (?,?,?,?,?)",
         (username, nickname, auth.hash_password(password), device_id, db.now()))
     db.run("UPDATE users SET last_seen=? WHERE id=?", (db.now(), uid))
+    activity.ensure_chat(uid)
     token = auth.create_token(uid)
     user = db.one("SELECT * FROM users WHERE id=?", (uid,))
     return {"token": token, "user": auth.public_user(user)}
@@ -127,9 +132,10 @@ def export_me(user=Depends(auth.current_user)):
                              "WHERE f.follower_id=?", (uid,)),
         "messages": db.rows("SELECT id, chat_id, kind, text, media, created_at "
                             "FROM messages WHERE user_id=? ORDER BY id", (uid,)),
-        "notifications": db.rows("SELECT id, kind, text, is_read, created_at "
-                                 "FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500",
-                                 (uid,)),
+        "activity": db.rows(
+            "SELECT m.id, m.text, m.created_at FROM messages m "
+            "JOIN chats c ON c.id=m.chat_id "
+            "WHERE c.type='activity' AND c.owner_id=? ORDER BY m.id DESC LIMIT 500", (uid,)),
     }
 
 
@@ -163,7 +169,7 @@ def delete_me(body: dict, user=Depends(auth.current_user)):
     db.run("DELETE FROM videos WHERE user_id=?", (uid,))
     db.run("DELETE FROM reports WHERE reporter_id=?", (uid,))
     db.run("DELETE FROM push_subs WHERE user_id=?", (uid,))
-    db.run("DELETE FROM notifications WHERE user_id=?", (uid,))
+    db.run("DELETE FROM chats WHERE type='activity' AND owner_id=?", (uid,))
     db.run("DELETE FROM tokens WHERE user_id=?", (uid,))
     db.run("DELETE FROM users WHERE id=?", (uid,))
     return {"ok": True}
@@ -208,6 +214,7 @@ def follow(username: str, user=Depends(auth.current_user)):
         db.run("INSERT INTO follows (follower_id, followee_id, created_at) VALUES (?,?,?)",
                (user["id"], u["id"], db.now()))
         followed = True
+        activity.add(u["id"], "follow", actor=user)
     count = db.one("SELECT COUNT(*) c FROM follows WHERE followee_id=?", (u["id"],))["c"]
     return {"followed": followed, "followers": count}
 
@@ -252,10 +259,12 @@ def search(q: str = "", user=Depends(auth.guest_or_user)):
                                                 (user["id"],))]
     if my_ids:
         ph = ",".join("?" * len(my_ids))
-        chats = db.rows(f"SELECT * FROM chats WHERE (title LIKE ? OR description LIKE ?) AND id NOT IN ({ph}) "
+        chats = db.rows(f"SELECT * FROM chats WHERE type!='activity' "
+                        f"AND (title LIKE ? OR description LIKE ?) AND id NOT IN ({ph}) "
                         "ORDER BY title LIMIT 20", (like, like, *my_ids))
     else:
-        chats = db.rows("SELECT * FROM chats WHERE (title LIKE ? OR description LIKE ?) AND type!='dm' "
+        chats = db.rows("SELECT * FROM chats WHERE type NOT IN ('dm','activity') "
+                        "AND (title LIKE ? OR description LIKE ?) "
                         "ORDER BY title LIMIT 20", (like, like))
     return {
         "users": [auth.public_user(u) for u in people],

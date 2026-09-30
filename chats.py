@@ -3,7 +3,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from . import auth, db, hub, notifs
+from . import activity, auth, db, hub
 
 router = APIRouter(prefix="/api")
 
@@ -21,7 +21,8 @@ def _last_message(chat_id: int):
 def _unread(chat_id: int, user_id: int):
     r = db.one("SELECT last_id FROM reads WHERE chat_id=? AND user_id=?", (chat_id, user_id))
     last = r["last_id"] if r else 0
-    return db.one("SELECT COUNT(*) c FROM messages WHERE chat_id=? AND id>? AND user_id!=?",
+    return db.one("SELECT COUNT(*) c FROM messages WHERE chat_id=? AND id>? "
+                  "AND COALESCE(user_id,0)!=?",
                   (chat_id, last, user_id))["c"]
 
 
@@ -33,6 +34,8 @@ def member_role(chat_id: int, user) -> str:
 
 
 def can_post(chat: dict, user) -> bool:
+    if chat["type"] == "activity":
+        return False
     role = member_role(chat["id"], user)
     if not role:
         return False
@@ -113,16 +116,82 @@ def message_payload(m: dict) -> dict:
     }
 
 
+def chat_unread(user_id: int) -> int:
+    return db.one(
+        "SELECT COUNT(*) c FROM messages m "
+        "JOIN chat_members cm ON cm.chat_id=m.chat_id AND cm.user_id=? "
+        "LEFT JOIN reads r ON r.chat_id=m.chat_id AND r.user_id=? "
+        "WHERE m.id > COALESCE(r.last_id, 0) AND COALESCE(m.user_id,0) <> ?",
+        (user_id, user_id, user_id))["c"]
+
+
+@router.get("/unread")
+def unread(user=Depends(auth.current_user)):
+    return {"chats": chat_unread(user["id"])}
+
+
 @router.get("/chats")
 def my_chats(user=Depends(auth.current_user)):
+    """Список чатов одним набором запросов: без per-chat выборок (быстро на слабом сервере)."""
+    activity.ensure_chat(user["id"])
     list_ = db.rows(
         "SELECT c.* FROM chats c JOIN chat_members m ON m.chat_id=c.id WHERE m.user_id=? "
         "ORDER BY c.id DESC", (user["id"],))
+    if not list_:
+        return {"items": []}
+    uid = user["id"]
+    ids = [c["id"] for c in list_]
+    ph = ",".join("?" * len(ids))
+    roles = {r["chat_id"]: r["role"] for r in db.rows(
+        f"SELECT chat_id, role FROM chat_members WHERE user_id=? AND chat_id IN ({ph})",
+        (uid, *ids))}
+    counts = {r["chat_id"]: r["c"] for r in db.rows(
+        f"SELECT chat_id, COUNT(*) c FROM chat_members WHERE chat_id IN ({ph}) GROUP BY chat_id",
+        ids)}
+    lasts = {r["chat_id"]: r for r in db.rows(
+        "SELECT m.*, u.username FROM messages m "
+        f"JOIN (SELECT chat_id, MAX(id) mid FROM messages WHERE chat_id IN ({ph}) GROUP BY chat_id) x "
+        "ON x.mid=m.id LEFT JOIN users u ON u.id=m.user_id", ids)}
+    unreads = {r["chat_id"]: r["c"] for r in db.rows(
+        "SELECT m.chat_id, COUNT(*) c FROM messages m "
+        "LEFT JOIN reads r ON r.chat_id=m.chat_id AND r.user_id=? "
+        f"WHERE m.chat_id IN ({ph}) AND m.id > COALESCE(r.last_id,0) "
+        "AND COALESCE(m.user_id,0) != ? GROUP BY m.chat_id", (uid, *ids, uid))}
+    peers = {}
+    dm_ids = [c["id"] for c in list_ if c["type"] == "dm"]
+    if dm_ids:
+        dph = ",".join("?" * len(dm_ids))
+        for r in db.rows(
+                "SELECT cm.chat_id, u.* FROM chat_members cm JOIN users u ON u.id=cm.user_id "
+                f"WHERE cm.chat_id IN ({dph}) AND cm.user_id != ?", (*dm_ids, uid)):
+            peers[r["chat_id"]] = r
     items = []
     for c in list_:
-        b = chat_brief(c, user)
-        if b["type"] == "dm" and b["last"] is None and b["peer"]:
-            continue
+        role = roles.get(c["id"])
+        last = lasts.get(c["id"])
+        b = {
+            "id": c["id"], "type": c["type"], "title": c["title"], "avatar": c["avatar"],
+            "description": c["description"], "link": c["link"], "owner_id": c["owner_id"],
+            "members_count": counts.get(c["id"], 0), "unread": unreads.get(c["id"], 0),
+            "last": None, "peer": None, "joined": role is not None, "role": role,
+            "can_post": bool(role) and c["type"] != "activity"
+                        and not (c["type"] == "channel" and role == "member"),
+            "can_manage": role in ("owner", "admin"),
+        }
+        if last:
+            b["last"] = {
+                "id": last["id"], "text": last["text"], "kind": last["kind"],
+                "created_at": last["created_at"], "user_id": last["user_id"],
+                "username": last.get("username"),
+            }
+        if c["type"] == "dm":
+            other = peers.get(c["id"])
+            if other:
+                b["title"] = other["nickname"]
+                b["peer"] = auth.public_user(other)
+                b["avatar"] = other["avatar"]
+            if b["last"] is None and b["peer"]:
+                continue
         items.append(b)
     items.sort(key=lambda x: (x["last"]["created_at"] if x["last"] else 0), reverse=True)
     return {"items": items}
@@ -203,6 +272,8 @@ async def send_message(chat_id: int,
                        user=Depends(auth.current_user)):
     chat = _get_chat(chat_id)
     _member_or_403(chat_id, user)
+    if chat["type"] == "activity":
+        raise HTTPException(403, "Это системный чат — сюда нельзя писать")
     if not can_post(chat, user):
         raise HTTPException(403, "Только владелец канала может публиковать")
 
@@ -236,13 +307,13 @@ async def send_message(chat_id: int,
            (chat_id, user["id"], mid))
     payload = message_payload(m)
     _broadcast_message(chat, payload)
-    # личное сообщение: уведомление собеседнику (точка в «Общении» + push)
+    # личное сообщение: push на телефон собеседнику (само сообщение уже в чате)
     if chat["type"] == "dm":
         preview = text[:120] if kind == "text" else (
             "📷 Фото" if kind == "photo" else "🎬 Видео" if kind == "video" else "🥔 Стикер")
         for mem in _members(chat_id):
             if mem["user_id"] != user["id"]:
-                notifs.add(mem["user_id"], "dm", actor=user, chat_id=chat_id, text=preview)
+                activity.push_dm(mem["user_id"], user, chat_id, preview)
     return payload
 
 
@@ -258,6 +329,8 @@ def read_chat(chat_id: int, user=Depends(auth.current_user)):
 @router.post("/chats/{chat_id}/join")
 def join_chat(chat_id: int, user=Depends(auth.current_user)):
     chat = _get_chat(chat_id)
+    if chat["type"] == "activity":
+        raise HTTPException(400, "Это системный чат")
     if chat["type"] == "dm":
         raise HTTPException(400, "Нельзя войти в личный чат")
     if not db.one("SELECT 1 x FROM chat_members WHERE chat_id=? AND user_id=?", (chat_id, user["id"])):
@@ -269,6 +342,8 @@ def join_chat(chat_id: int, user=Depends(auth.current_user)):
 @router.post("/chats/{chat_id}/leave")
 def leave_chat(chat_id: int, user=Depends(auth.current_user)):
     chat = _get_chat(chat_id)
+    if chat["type"] == "activity":
+        raise HTTPException(400, "Системный чат нельзя покинуть")
     if chat["owner_id"] == user["id"]:
         raise HTTPException(400, "Владелец не может выйти. Удалите чат.")
     db.run("DELETE FROM chat_members WHERE chat_id=? AND user_id=?", (chat_id, user["id"]))
@@ -383,6 +458,8 @@ def remove_member(chat_id: int, uid: int, user=Depends(auth.current_user)):
 @router.delete("/chats/{chat_id}")
 def delete_chat(chat_id: int, user=Depends(auth.current_user)):
     chat = _get_chat(chat_id)
+    if chat["type"] == "activity":
+        raise HTTPException(400, "Системный чат нельзя удалить")
     if chat["type"] == "dm":
         raise HTTPException(400, "Личные чаты не удаляются")
     if chat["owner_id"] != user["id"]:
