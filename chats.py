@@ -3,7 +3,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from . import auth, db, hub
+from . import auth, db, hub, notifs
 
 router = APIRouter(prefix="/api")
 
@@ -236,6 +236,13 @@ async def send_message(chat_id: int,
            (chat_id, user["id"], mid))
     payload = message_payload(m)
     _broadcast_message(chat, payload)
+    # личное сообщение: уведомление собеседнику (точка в «Общении» + push)
+    if chat["type"] == "dm":
+        preview = text[:120] if kind == "text" else (
+            "📷 Фото" if kind == "photo" else "🎬 Видео" if kind == "video" else "🥔 Стикер")
+        for mem in _members(chat_id):
+            if mem["user_id"] != user["id"]:
+                notifs.add(mem["user_id"], "dm", actor=user, chat_id=chat_id, text=preview)
     return payload
 
 

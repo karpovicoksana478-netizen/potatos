@@ -1,4 +1,4 @@
-const CACHE = 'potatos-v9';
+const CACHE = 'potatos-v10';
 const ASSETS = [
   '/', '/static/style.css', '/static/app.js', '/static/feed.js',
   '/static/chats.js', '/static/profile.js',
@@ -45,6 +45,33 @@ async function cacheFirst(req) {
   }
   return res;
 }
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/#/home';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if ('focus' in c) { c.focus(); if ('navigate' in c) c.navigate(url); return; }
+      }
+      return clients.openWindow(url);
+    })
+  );
+});
+
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data.json(); }
+  catch (err) { d = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || '🥔 potatos', {
+    body: d.body || '',
+    icon: '/static/icon-192.png',
+    badge: '/static/icon-192.png',
+    tag: d.tag || 'potatos',
+    renotify: true,
+    data: { url: d.url || '/#/home' }
+  }));
+});
 
 self.addEventListener('fetch', e => {
   const req = e.request;

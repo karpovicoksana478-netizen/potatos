@@ -41,6 +41,24 @@ function videoThumb(file) {
   });
 }
 
+/* ---------------- жалобы ---------------- */
+const REPORT_REASONS = ['Спам', 'Оскорбления', 'Накрутка и фейки', '18+ или опасный контент', 'Другое'];
+
+function reportSheet(kind, id) {
+  if (!App.me) { navigate('#/auth'); return; }
+  const m = sheet('⚠️ Пожаловаться', `
+    <div class="lbl" style="margin-top:0">Что не так?</div>
+    ${REPORT_REASONS.map((r, i) => `<button class="rep-opt" data-i="${i}">${r}</button>`).join('')}
+    <div style="height:8px"></div>`);
+  $$('.rep-opt', m).forEach(b => b.onclick = async () => {
+    try {
+      await api('/api/reports', { method: 'POST', body: { kind, id, reason: REPORT_REASONS[+b.dataset.i] } });
+      Overlay.close();
+      toast('Спасибо! Жалоба отправлена');
+    } catch (e) { }
+  });
+}
+
 /* ---------------- comments ---------------- */
 async function openComments(videoId, onCount) {
   const body = sheet('Комментарии', `
@@ -60,7 +78,8 @@ async function openComments(videoId, onCount) {
         ${c.media ? `<img class="cmt-img" src="${esc(mediaURL(c.media))}" alt="">` : ''}
         ${c.text ? `<div class="tx">${esc(c.text)}</div>` : ''}
         <div class="cmt-act"><button data-reply data-ruid="${c.id}" data-ruser="${esc(c.username)}"
-          data-rtext="${esc((c.text || '').slice(0, 120))}">Ответить</button></div>
+          data-rtext="${esc((c.text || '').slice(0, 120))}">Ответить</button>
+          ${App.me && c.username !== App.me.username ? '<button data-repc>Пожаловаться</button>' : ''}</div>
       </div>
     </div>`;
 
@@ -83,6 +102,10 @@ async function openComments(videoId, onCount) {
       const inp = $('input', input);
       inp.focus();
       inp.placeholder = 'Ответ @' + reply.username;
+    });
+    $$('[data-repc]', root).forEach(btn => btn.onclick = () => {
+      const c = btn.closest('.cmt');
+      reportSheet('comment', +c.dataset.id);
     });
   };
 
@@ -253,6 +276,7 @@ function createFeed(root, opts = {}) {
         <button class="act ${v.saved ? 'saved' : ''}" data-save title="Сохранить">
           <span class="ico">${v.saved ? '🔖' : '📑'}</span>
         </button>
+        ${(App.me && !v.mine) ? `<button class="act" data-report title="Пожаловаться"><span class="ico">⚠️</span></button>` : ''}
         <div class="disc">🎵</div>
       </div>
       <div class="meta">
@@ -395,6 +419,12 @@ function createFeed(root, opts = {}) {
           toast('Видео удалено');
         } catch (err) { }
       }, 'Удалить');
+    });
+
+    const repBtn = $('[data-report]', p);
+    repBtn && (repBtn.onclick = e => {
+      e.stopPropagation();
+      reportSheet('post', v.id);
     });
 
     if (media.tagName === 'VIDEO') {

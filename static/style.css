@@ -544,3 +544,32 @@ html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
   box-shadow:0 2px 6px rgba(0,0,0,.4);transition:.12s}
 .draw-color.on{border-color:#fff;transform:scale(1.18)}
 .draw-tools input[type=range]{width:110px;accent-color:var(--accent)}
+
+/* ---------- УВЕДОМЛЕНИЯ И ЖАЛОБЫ ---------- */
+.tab{position:relative}
+.tab-dot{position:absolute;top:7px;left:calc(50% + 7px);width:10px;height:10px;border-radius:50%;
+  background:#ff4d67;border:2px solid var(--chrome);box-shadow:0 0 6px rgba(255,77,103,.7);z-index:2}
+.topbar .back .tab-dot{top:-3px;left:auto;right:-3px;border-color:var(--chrome)}
+.nrow{display:flex;gap:10px;align-items:flex-start;padding:12px;border-radius:14px;
+  background:var(--panel2);border:1px solid var(--line);margin-bottom:8px;position:relative;cursor:pointer}
+.nrow .n-ava{flex:none}
+.nrow .n-ava .ph{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;background:var(--panel3);font-size:18px}
+.n-b{flex:1;min-width:0}
+.n-t{font-size:14px;font-weight:600;line-height:1.35}
+.n-x{font-size:13px;color:var(--muted);margin-top:2px;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.n-time{font-size:11.5px;color:var(--muted);margin-top:4px}
+.n-unread{position:absolute;top:12px;right:12px;width:9px;height:9px;border-radius:50%;background:#ff4d67}
+.notif-empty{text-align:center;padding:50px 16px;color:var(--muted);
+  display:flex;flex-direction:column;gap:8px;align-items:center}
+.notif-empty b{color:var(--text);font-size:16px}
+.notif-empty span{font-size:13px;line-height:1.5}
+.rep-opt{display:block;width:100%;text-align:left;background:var(--panel2);border:1px solid var(--line);
+  color:var(--text);border-radius:12px;padding:13px 14px;font-size:14.5px;margin-bottom:8px;cursor:pointer}
+.rep-opt:active{background:var(--panel3)}
+.rep-row{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+.rep-h{font-size:13px;color:var(--muted)}
+.rep-x{font-size:14px;margin-top:6px;line-height:1.4;word-break:break-word}
+.rep-m{font-size:12.5px;color:var(--muted);margin-top:6px}
+.cmt-act [data-repc]{color:var(--muted);opacity:.8}

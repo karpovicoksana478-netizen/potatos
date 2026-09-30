@@ -1,3 +1,4 @@
+import os
 import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -102,6 +103,70 @@ async def set_avatar(file: UploadFile = File(...), user=Depends(auth.current_use
     db.run("UPDATE users SET avatar=? WHERE id=?", (path, user["id"]))
     u = db.one("SELECT * FROM users WHERE id=?", (user["id"],))
     return {"user": auth.public_user(u)}
+
+
+@router.get("/me/export")
+def export_me(user=Depends(auth.current_user)):
+    """Выгрузка всех своих данных одним JSON-файлом."""
+    uid = user["id"]
+    prof = {k: user.get(k) for k in ("id", "username", "nickname", "bio", "avatar",
+                                     "is_admin", "created_at", "device_id")}
+    return {
+        "app": "potatos",
+        "exported_at": db.now(),
+        "profile": prof,
+        "posts": db.rows("SELECT id, kind, media, thumb, caption, sound, views, created_at "
+                         "FROM videos WHERE user_id=? ORDER BY id DESC", (uid,)),
+        "comments": db.rows("SELECT id, video_id, text, media, parent_id, created_at "
+                            "FROM comments WHERE user_id=? ORDER BY id DESC", (uid,)),
+        "likes": db.rows("SELECT video_id, created_at FROM likes WHERE user_id=?", (uid,)),
+        "saved": db.rows("SELECT video_id, created_at FROM saves WHERE user_id=?", (uid,)),
+        "followers": db.rows("SELECT u.username FROM follows f JOIN users u ON u.id=f.follower_id "
+                             "WHERE f.followee_id=?", (uid,)),
+        "following": db.rows("SELECT u.username FROM follows f JOIN users u ON u.id=f.followee_id "
+                             "WHERE f.follower_id=?", (uid,)),
+        "messages": db.rows("SELECT id, chat_id, kind, text, media, created_at "
+                            "FROM messages WHERE user_id=? ORDER BY id", (uid,)),
+        "notifications": db.rows("SELECT id, kind, text, is_read, created_at "
+                                 "FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500",
+                                 (uid,)),
+    }
+
+
+@router.delete("/me")
+def delete_me(body: dict, user=Depends(auth.current_user)):
+    """Стереть аккаунт: посты, комментарии, переписка и файлы удаляются."""
+    if user.get("is_admin"):
+        raise HTTPException(400, "Аккаунт администратора удалить нельзя")
+    if not auth.verify_password((body.get("password") or ""), user["password"]):
+        raise HTTPException(400, "Неверный пароль")
+    uid = user["id"]
+
+    def _unlink(rel):
+        if not rel or "/" not in rel:
+            return
+        folder, name = rel.split("/", 1)
+        if folder in ("videos", "images", "thumbs", "avatars", "edited") and ".." not in name:
+            try:
+                os.remove(os.path.join(db.MEDIA, folder, name))
+            except OSError:
+                pass
+
+    for v in db.rows("SELECT media, thumb FROM videos WHERE user_id=?", (uid,)):
+        _unlink(v["media"])
+        _unlink(v["thumb"])
+    _unlink(user.get("avatar") or "")
+    for cm in db.rows("SELECT media FROM comments WHERE user_id=?", (uid,)):
+        _unlink(cm["media"])
+    db.run("DELETE FROM messages WHERE user_id=?", (uid,))
+    db.run("DELETE FROM comments WHERE user_id=?", (uid,))
+    db.run("DELETE FROM videos WHERE user_id=?", (uid,))
+    db.run("DELETE FROM reports WHERE reporter_id=?", (uid,))
+    db.run("DELETE FROM push_subs WHERE user_id=?", (uid,))
+    db.run("DELETE FROM notifications WHERE user_id=?", (uid,))
+    db.run("DELETE FROM tokens WHERE user_id=?", (uid,))
+    db.run("DELETE FROM users WHERE id=?", (uid,))
+    return {"ok": True}
 
 
 @router.get("/user/{username}")

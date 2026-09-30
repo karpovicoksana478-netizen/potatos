@@ -10,6 +10,7 @@ from . import auth, db, hub
 from .admin import router as admin_router
 from .chats import router as chats_router
 from .edit import router as edit_router
+from .notifs import router as notifs_router
 from .users import router as users_router
 from .videos import router as videos_router
 
@@ -41,6 +42,7 @@ app.include_router(videos_router)
 app.include_router(chats_router)
 app.include_router(edit_router)
 app.include_router(admin_router)
+app.include_router(notifs_router)
 
 STATIC = os.path.join(db.BASE, "static")
 

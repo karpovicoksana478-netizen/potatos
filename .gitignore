@@ -20,3 +20,5 @@ venv/
 push.log
 push.err
 opencode_tmp/
+
+vapid.pem

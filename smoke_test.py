@@ -108,6 +108,37 @@ def main():
     check("avatar", av["user"]["avatar"].startswith("avatars/"))
     check("user videos", len(c.get(f"/api/user/{U1}/videos").json()["items"]) == 1)
 
+    # --- уведомления: лайк/коммент/упоминание, счётчики, прочтение ---
+    n2 = c.get("/api/notifications", headers=hb).json()
+    kinds2 = [i["kind"] for i in n2["items"]]
+    check("notif: лайк автору", "like" in kinds2 and n2["unread"] >= 1, n2)
+    check("notif: комментарий автору", "comment" in kinds2, kinds2)
+    n1 = c.get("/api/notifications", headers=ha).json()
+    check("notif: про своё не приходит",
+          not any(i["kind"] in ("like", "comment") for i in n1["items"]), n1)
+    c.post("/api/upload", headers=hb, files={"file": ("men.jpg", png(), "image/jpeg")},
+           data={"caption": f"привет @{U1}!"})
+    n1 = c.get("/api/notifications", headers=ha).json()
+    check("notif: упоминание", any(i["kind"] == "mention" for i in n1["items"]), n1)
+    un = c.get("/api/unread", headers=ha).json()
+    check("unread счётчики", un["notifications"] >= 1 and un["chats"] >= 0, un)
+    c.post("/api/notifications/read", headers=ha, json={})
+    check("notif: прочтение всех", c.get("/api/notifications", headers=ha).json()["unread"] == 0)
+    check("notif: свой пост не попал", len(c.get("/api/notifications", headers=ha)
+                                           .json()["items"]) >= 1)
+
+    # --- push: ключ, подписка, отписка ---
+    key = c.get("/api/push/public-key").json().get("key", "")
+    check("push public key", len(key) > 60, key)
+    sub = {"endpoint": "https://push.example.invalid/" + S,
+           "keys": {"p256dh": "B" * 87, "auth": "a" * 24}}
+    check("push subscribe",
+          c.post("/api/push/subscribe", headers=ha, json=sub).json().get("ok") is True)
+    check("push subscribe requires auth", c.post("/api/push/subscribe", json=sub).status_code == 401)
+    check("push unsubscribe",
+          c.post("/api/push/unsubscribe", headers=ha, json={"endpoint": sub["endpoint"]})
+          .json().get("ok") is True)
+
     # --- редактор: обрезка, склейка, публикация обработанного файла ---
     import os
     import subprocess
@@ -193,6 +224,9 @@ def main():
 
     msg = c.post(f"/api/chats/{dm['id']}/send", headers=ha, data={"text": "привет!", "kind": "text"}).json()
     check("send dm", msg["text"] == "привет!")
+    ndm = c.get("/api/notifications", headers=hb).json()
+    check("notif: лс собеседнику",
+          any(i["kind"] == "dm" and i["chat_id"] == dm["id"] for i in ndm["items"]), ndm)
     msg2 = c.post(f"/api/chats/{dm['id']}/send", headers=hb, data={"text": "и тебе привет", "kind": "text"}).json()
     check("send reply", msg2["user_id"] != msg["user_id"])
     hist = c.get(f"/api/chats/{dm['id']}/messages", headers=hb).json()["items"]
@@ -314,7 +348,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=10" in c.get("/").text and "admin.js" not in c.get("/").text)
+    check("shell bumped", "v=11" in c.get("/").text and "admin.js" not in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -333,6 +367,34 @@ def main():
           c.get(f"/api/user/{U1}", headers=hadm).json().get("admin", {}).get("banned") is False)
     check("profile hides status from user",
           "admin" not in c.get(f"/api/user/{U1}", headers=ha).json())
+
+    # --- жалобы: пользователь жалуется, админ видит и удаляет ---
+    bad_post = c.post("/api/upload", headers=hb,
+                      files={"file": ("bad.jpg", png(), "image/jpeg")},
+                      data={"caption": "спам-пост"}).json()
+    rp = c.post("/api/reports", headers=ha,
+                json={"kind": "post", "id": bad_post["id"], "reason": "Спам"})
+    check("report create", rp.json().get("ok") is True, rp.text)
+    check("report duplicate rejected",
+          c.post("/api/reports", headers=ha,
+                 json={"kind": "post", "id": bad_post["id"], "reason": "Спам"}).status_code == 400)
+    check("report own rejected",
+          c.post("/api/reports", headers=hb,
+                 json={"kind": "post", "id": bad_post["id"], "reason": "Спам"}).status_code == 400)
+    check("report needs auth",
+          c.post("/api/reports", json={"kind": "post", "id": bad_post["id"]}).status_code == 401)
+    rl = c.get("/api/admin/reports", headers=hadm).json()
+    mine_rp = [r for r in rl["items"] if r["target_id"] == bad_post["id"]]
+    check("admin reports list", bool(mine_rp) and mine_rp[0]["target"]["owner"] == U2, rl)
+    check("admin reports forbidden", c.get("/api/admin/reports", headers=ha).status_code == 403)
+    rid = mine_rp[0]["id"]
+    check("admin resolve delete",
+          c.post(f"/api/admin/reports/{rid}/resolve", headers=hadm,
+                 json={"action": "delete"}).json()["ok"] is True)
+    check("reported post gone",
+          all(i["id"] != bad_post["id"] for i in c.get("/api/feed").json()["items"]))
+    check("report resolved", all(r["id"] != rid for r in
+                                 c.get("/api/admin/reports", headers=hadm).json()["items"]))
 
     check("admin temp ban",
           c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,
@@ -368,6 +430,26 @@ def main():
           c.delete(f"/api/video/{vid}", headers=hadm).json()["ok"] is True)
     check("deleted video gone", c.delete(f"/api/video/{vid}", headers=hadm).status_code == 404)
     check("owner cannot delete video", c.delete(f"/api/video/{vid}", headers=ha).status_code == 404)
+
+    # --- свои данные: выгрузка и удаление аккаунта ---
+    ex = c.get("/api/me/export", headers=ha).json()
+    check("me export", ex["profile"]["username"] == U1
+          and any(p["caption"] == "первая публикация" for p in ex["posts"]), list(ex.keys()))
+    check("export needs auth", c.get("/api/me/export").status_code == 401)
+    check("delete wrong password",
+          c.request("DELETE", "/api/me", headers=ha,
+                    json={"password": "nope"}).status_code == 400)
+    check("admin cannot delete self",
+          c.request("DELETE", "/api/me", headers=hadm,
+                    json={"password": "19892012Burmalda"}).status_code == 400)
+    check("delete account",
+          c.request("DELETE", "/api/me", headers=ha,
+                    json={"password": "1234"}).json().get("ok") is True)
+    check("deleted token dead", c.get("/api/me", headers=ha).status_code == 401)
+    check("deleted user gone",
+          c.post("/api/login", json={"username": U1, "password": "1234"}).status_code == 400)
+    check("username freed", c.post("/api/register", json={
+        "nickname": "Снова", "username": U1, "password": "1234"}).status_code == 200)
 
     print(f"\n== PASSED {ok} checks ==")
 

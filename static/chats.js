@@ -1,5 +1,13 @@
 /* potatos — общение: список чатов, поиск, группы/каналы, переписка */
 
+/* непрочитанные сообщения -> красная точка на вкладке «Общение» */
+function chatUnreadSum() {
+  return (Chats.list || []).reduce((s, c) => s + (c.unread || 0), 0);
+}
+function syncChatBadge() {
+  if (window.Badges) Badges.setChats(chatUnreadSum());
+}
+
 const Chats = {
   list: [],
   current: null,   // {id, ...}
@@ -8,6 +16,7 @@ const Chats = {
     try {
       const d = await api('/api/chats');
       Chats.list = d.items;
+      syncChatBadge();
       return Chats.list;
     } catch (e) { return []; }
   },
@@ -26,6 +35,7 @@ const Chats = {
         if (cc) cc.unread = (cc.unread || 0) + 1;
         if (App.route.name === 'chats') refreshChatList();
       }
+      syncChatBadge();
     } else if (d.type === 'typing') {
       if (App.route.name === 'chat' && +App.route.args[0] === d.chat_id) ChatView.typing(d.username);
     } else if (d.type === 'deleted') {
@@ -284,6 +294,9 @@ views.chat = async function (screen, r) {
     };
   } else {
     api(`/api/chats/${id}/read`, { method: 'POST', silent: true });
+    const opened = Chats.find(id);
+    if (opened) opened.unread = 0;
+    syncChatBadge();
     api(`/api/chats/${id}/messages`).then(d => {
       ChatView.msgs = [];
       msgsEl.innerHTML = '';

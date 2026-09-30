@@ -1,4 +1,5 @@
-"""Админ-панель: список пользователей, баны, запрет публикаций."""
+"""Админ-панель: список пользователей, баны, запрет публикаций, жалобы."""
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -89,3 +90,53 @@ def posts_ban(uid: int, body: dict, admin=Depends(admin_user)):
     db.run("UPDATE users SET posts_banned_until=? WHERE id=?", (value, uid))
     return {"ok": True, "posts_banned_until": value,
             "blocked": value == -1 or value > int(time.time())}
+
+
+# ---------- жалобы пользователей ----------
+@router.get("/reports")
+def reports(status: str = "open", admin=Depends(admin_user)):
+    if status not in ("open", "done", "all"):
+        status = "open"
+    where, args = ("", ()) if status == "all" else ("WHERE r.status=?", (status,))
+    rows = db.rows(
+        "SELECT r.*, u.username AS reporter, u.nickname AS reporter_nick "
+        "FROM reports r LEFT JOIN users u ON u.id=r.reporter_id " + where +
+        " ORDER BY r.id DESC LIMIT 200", args)
+    for r in rows:
+        r["target"] = None
+        if r["kind"] == "post":
+            r["target"] = db.one(
+                "SELECT v.id, v.kind, v.caption, v.media, v.thumb, v.user_id, u.username AS owner "
+                "FROM videos v JOIN users u ON u.id=v.user_id WHERE v.id=?", (r["target_id"],))
+        elif r["kind"] == "comment":
+            r["target"] = db.one(
+                "SELECT c.id, c.text, c.media, c.video_id, c.user_id, u.username AS owner "
+                "FROM comments c JOIN users u ON u.id=c.user_id WHERE c.id=?", (r["target_id"],))
+    return {"items": rows, "open": db.one(
+        "SELECT COUNT(*) c FROM reports WHERE status='open'")["c"]}
+
+
+@router.post("/reports/{rid}/resolve")
+def resolve_report(rid: int, body: dict, admin=Depends(admin_user)):
+    r = db.one("SELECT * FROM reports WHERE id=?", (rid,))
+    if not r:
+        raise HTTPException(404, "Жалоба не найдена")
+    action = body.get("action") or "close"
+    if action not in ("delete", "close"):
+        raise HTTPException(400, "action: delete или close")
+    if action == "delete":
+        if r["kind"] == "post":
+            v = db.one("SELECT * FROM videos WHERE id=?", (r["target_id"],))
+            if v:
+                db.run("DELETE FROM videos WHERE id=?", (v["id"],))
+                for folder in ("videos", "images", "thumbs"):
+                    try:
+                        os.remove(os.path.join(db.MEDIA, folder, os.path.basename(v["media"])))
+                    except OSError:
+                        pass
+        else:
+            db.run("DELETE FROM comments WHERE id=?", (r["target_id"],))
+    db.run("UPDATE reports SET status='done' "
+           "WHERE id=? OR (kind=? AND target_id=? AND status='open')",
+           (rid, r["kind"], r["target_id"]))
+    return {"ok": True, "action": action}

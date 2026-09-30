@@ -65,7 +65,8 @@ views.profile = async function (screen, r) {
     <div class="topbar">
       ${isMe ? '' : '<button class="back" data-back>←</button>'}
       <h1 style="font-size:16px">@${esc(prof.username)}</h1>
-      ${isMe ? '<button class="back" data-settings style="font-size:17px">⚙</button>' : ''}
+      ${isMe ? `<button class="back" data-notifs style="font-size:15px">🔔<i class="tab-dot" data-dot="notif"${Badges.notif ? '' : ' hidden'}></i></button>
+                <button class="back" data-settings style="font-size:17px">⚙</button>` : ''}
     </div>
     <div class="prof-head">
       <div class="ava-box">
@@ -96,6 +97,7 @@ views.profile = async function (screen, r) {
 
   $('[data-back]', screen) && ($('[data-back]', screen).onclick = () => history.back());
   $('[data-settings]', screen) && ($('[data-settings]', screen).onclick = () => navigate('#/settings'));
+  $('[data-notifs]', screen) && ($('[data-notifs]', screen).onclick = () => navigate('#/notifs'));
   $('[data-edit]', screen) && ($('[data-edit]', screen).onclick = () => navigate('#/edit'));
   $('[data-adm]', screen) && ($('[data-adm]', screen).onclick = () => adminUserMenu(prof, adm));
 
@@ -228,6 +230,66 @@ views.edit = async function (screen) {
 };
 
 
+/* ---------------- экран уведомлений ---------------- */
+function notifRow(n) {
+  return `
+  <div class="nrow" data-id="${n.id}" data-kind="${esc(n.kind)}" data-chat="${n.chat_id || ''}">
+    <div class="n-ava">${n.actor ? ava(n.actor.avatar, 'sm') : '<div class="ph">🥔</div>'}</div>
+    <div class="n-b">
+      <div class="n-t">${esc(n.title)}</div>
+      ${n.body ? `<div class="n-x">${esc(n.body)}</div>` : ''}
+      <div class="n-time">${timeAgo(n.created_at)}</div>
+    </div>
+    ${n.is_read ? '' : '<i class="n-unread"></i>'}
+  </div>`;
+}
+
+views.notifs = async function (screen) {
+  if (!requireAuth()) return;
+  screen.innerHTML = `
+    <div class="topbar">
+      <button class="back" data-back>←</button>
+      <h1 style="font-size:16px">Уведомления</h1>
+      <button class="back" data-all style="width:auto;padding:0 10px;font-size:13px">Прочитать</button>
+    </div>
+    <div class="page"><div data-list><div class="loader"><div class="spin"></div></div></div></div>`;
+
+  $('[data-back]', screen).onclick = () => history.length > 1 ? history.back()
+    : navigate('#/profile/' + App.me.username);
+
+  const paint = async () => {
+    let d = { items: [], unread: 0 };
+    try { d = await api('/api/notifications'); } catch (e) { }
+    Badges.setNotif(d.unread || 0);
+    const host = $('[data-list]', screen);
+    if (!host) return;
+    if (!d.items.length) {
+      host.innerHTML = `<div class="notif-empty">
+        <div style="font-size:44px">🔔</div>
+        <b>Пока нет уведомлений</b>
+        <span>Лайки, ответы, упоминания и личные сообщения появятся здесь</span></div>`;
+      return;
+    }
+    host.innerHTML = d.items.map(notifRow).join('');
+    $$('.nrow', host).forEach(r => r.onclick = async () => {
+      const id = +r.dataset.id;
+      try {
+        await api('/api/notifications/read', { method: 'POST', body: { ids: [id] }, silent: true });
+      } catch (e) { }
+      Badges.setNotif(Math.max(0, Badges.notif - 1));
+      if (r.dataset.kind === 'dm' && r.dataset.chat) navigate('#/chat/' + r.dataset.chat);
+      else navigate('#/home');
+    });
+  };
+
+  $('[data-all]', screen).onclick = async () => {
+    try { await api('/api/notifications/read', { method: 'POST', silent: true }); } catch (e) { }
+    Badges.setNotif(0);
+    paint();
+  };
+  await paint();
+};
+
 /* ---------------- настройки и тема ---------------- */
 views.settings = async function (screen) {
   if (!requireAuth()) return;
@@ -252,10 +314,27 @@ views.settings = async function (screen) {
       </div>
 
       <div class="divider"></div>
+      <label class="lbl" style="margin-top:0">Уведомления</label>
+      <button class="btn ghost" data-opennotifs>🔔 Уведомления в приложении</button>
+      <div style="height:10px"></div>
+      <button class="btn ghost" data-push>🔔 Уведомления на телефоне</button>
+
+      <div class="divider"></div>
       <label class="lbl" style="margin-top:0">Аккаунт</label>
       <button class="btn ghost" data-edit>✏️ Редактировать профиль</button>
       <div style="height:10px"></div>
-      <button class="btn danger" data-logout>Выйти из аккаунта</button>
+      <button class="btn ghost" data-logout>Выйти из аккаунта</button>
+
+      <div class="divider"></div>
+      <label class="lbl" style="margin-top:0">Мои данные</label>
+      <button class="btn ghost" data-export>📦 Выгрузить данные (JSON)</button>
+      <div style="height:10px"></div>
+      <button class="btn danger" data-del>🗑 Удалить аккаунт</button>
+
+      ${App.me.is_admin ? `
+      <div class="divider"></div>
+      <label class="lbl" style="margin-top:0">Модерация</label>
+      <button class="btn ghost" data-reports>⚠️ Жалобы<span data-repcount></span></button>` : ''}
 
       <div class="divider"></div>
       <div class="inline-note">
@@ -275,6 +354,7 @@ views.settings = async function (screen) {
   });
 
   $('[data-edit]', screen).onclick = () => navigate('#/edit');
+  $('[data-opennotifs]', screen).onclick = () => navigate('#/notifs');
   $('[data-logout]', screen).onclick = () => {
     confirmModal('Выйти из аккаунта?', async () => {
       try { await api('/api/logout', { method: 'POST', silent: true }); } catch (e) { }
@@ -282,7 +362,156 @@ views.settings = async function (screen) {
       navigate('#/auth');
     }, 'Выйти');
   };
+
+  /* push на телефон: подписка через Service Worker */
+  const pb = $('[data-push]', screen);
+  const pushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  if (!pushOK) {
+    pb.disabled = true;
+    pb.textContent = '🔕 Push не поддерживаются в этом браузере';
+  } else {
+    navigator.serviceWorker.ready
+      .then(reg => reg.pushManager.getSubscription())
+      .then(sub => { pb.textContent = sub ? '🔕 Выключить уведомления' : '🔔 Уведомления на телефоне'; })
+      .catch(() => { });
+    pb.onclick = async () => {
+      pb.disabled = true;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const cur = await reg.pushManager.getSubscription();
+        if (cur) {
+          await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: cur.endpoint }, silent: true });
+          await cur.unsubscribe();
+          pb.textContent = '🔔 Уведомления на телефоне';
+          toast('Уведомления выключены');
+          return;
+        }
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { toast('Браузер не разрешил уведомления'); return; }
+        const d = await api('/api/push/public-key');
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true, applicationServerKey: urlB64ToUint8(d.key)
+        });
+        await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+        pb.textContent = '🔕 Выключить уведомления';
+        toast('Уведомления на телефоне включены');
+      } catch (e) {
+        toast('Не удалось включить уведомления');
+      }
+      pb.disabled = false;
+    };
+  }
+
+  /* выгрузка своих данных файлом */
+  $('[data-export]', screen).onclick = async () => {
+    const btn = $('[data-export]', screen);
+    btn.disabled = true;
+    try {
+      const d = await api('/api/me/export');
+      const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `potatos-${App.me.username}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      toast('Файл сохранён');
+    } catch (e) { }
+    btn.disabled = false;
+  };
+
+  /* удаление аккаунта */
+  $('[data-del]', screen).onclick = () => {
+    const m = modal(`<h3>Удалить аккаунт?</h3>
+      <p class="muted" style="font-size:13.5px;line-height:1.5;margin:10px 0 0">
+        Посты, комментарии, переписка и файлы будут удалены безвозвратно.
+        Отменить будет нельзя.</p>
+      <label class="lbl" style="margin-top:14px">Пароль</label>
+      <input class="field" data-pw type="password" placeholder="••••••••" autocomplete="current-password">
+      <div class="row" style="margin-top:16px;gap:10px">
+        <button class="btn ghost" data-no>Отмена</button>
+        <button class="btn danger" data-yes>Удалить навсегда</button>
+      </div>`);
+    $('[data-no]', m).onclick = () => Overlay.close();
+    const kill = async () => {
+      const pw = $('[data-pw]', m).value;
+      if (!pw) { toast('Введите пароль'); return; }
+      const yes = $('[data-yes]', m);
+      yes.disabled = true;
+      try {
+        await api('/api/me', { method: 'DELETE', body: { password: pw } });
+        Overlay.close();
+        logoutLocal();
+        toast('Аккаунт удалён');
+        navigate('#/auth');
+      } catch (e) { yes.disabled = false; }
+    };
+    $('[data-yes]', m).onclick = kill;
+    $('[data-pw]', m).onkeydown = e => { if (e.key === 'Enter') kill(); };
+  };
+
+  /* очередь жалоб (только админ) */
+  const rb = $('[data-reports]', screen);
+  if (rb) {
+    rb.onclick = () => openReports();
+    api('/api/admin/reports', { silent: true })
+      .then(d => { const el = $('[data-repcount]', screen); if (el && d.open) el.textContent = ` (${d.open})`; })
+      .catch(() => { });
+  }
 };
+
+/* ---------------- очередь жалоб администратора ---------------- */
+async function openReports() {
+  const m = sheet('⚠️ Жалобы', '<div class="loader"><div class="spin"></div></div>');
+  const body = $('.sh-body', m);
+  const paint = async () => {
+    let d;
+    try { d = await api('/api/admin/reports'); } catch (e) {
+      body.innerHTML = '<div class="inline-note">Не удалось загрузить жалобы</div>';
+      return;
+    }
+    if (!d.items.length) {
+      body.innerHTML = '<div class="inline-note">Жалоб нет — всё чисто 🎉</div>';
+      return;
+    }
+    body.innerHTML = d.items.map(r => {
+      const t = r.target || {};
+      const what = r.kind === 'post' ? 'Пост' : 'Комментарий';
+      const snippet = (t.caption || t.text || '').slice(0, 110) || (r.kind === 'post' ? '[медиа]' : '');
+      const done = r.status !== 'open';
+      return `<div class="rep-row" data-id="${r.id}">
+        <div class="rep-h"><b>${what}</b> · @${esc(t.owner || '?')} · ${timeAgo(r.created_at)}</div>
+        <div class="rep-x">${esc(snippet)}</div>
+        <div class="rep-m">причина: ${esc(r.reason || '—')} · от @${esc(r.reporter || '?')}</div>
+        ${done ? '<div class="rep-m">✅ Рассмотрено</div>' : `
+        <div class="row" style="gap:8px;margin-top:8px">
+          <button class="btn sm danger" data-del>🗑 Удалить</button>
+          <button class="btn sm ghost" data-close>Закрыть</button>
+        </div>`}
+      </div>`;
+    }).join('');
+    $$('.rep-row', body).forEach(row => {
+      const id = +row.dataset.id;
+      const del = $('[data-del]', row);
+      const close = $('[data-close]', row);
+      del && (del.onclick = () => confirmModal('Удалить этот контент?', async () => {
+        try {
+          await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'delete' } });
+          toast('Контент удалён');
+          paint();
+        } catch (e) { }
+      }, 'Удалить'));
+      close && (close.onclick = async () => {
+        try {
+          await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'close' } });
+          toast('Жалоба закрыта');
+          paint();
+        } catch (e) { }
+      });
+    });
+  };
+  await paint();
+}
 
 /* ---------------- меню администратора в профиле ---------------- */
 function fmtTime(ts) {

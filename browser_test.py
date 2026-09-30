@@ -317,8 +317,15 @@ def main():
         wait(driver, "[data-preview]:not([hidden]) img.preview", 15)
         check("фото в превью", len(driver.find_elements(
             By.CSS_SELECTOR, "[data-preview]:not([hidden]) img.preview")) == 1)
-        driver.find_element(By.CSS_SELECTOR, "[data-draw]").click()
-        wait(driver, ".draw-modal canvas", 10)
+        draw_btn = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "[data-draw]")))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", draw_btn)
+        time.sleep(0.3)
+        try:
+            draw_btn.click()
+        except Exception:
+            driver.execute_script("arguments[0].click()", draw_btn)
+        wait(driver, ".draw-modal canvas", 15)
         check("окно рисования", len(driver.find_elements(By.CSS_SELECTOR, ".draw-modal canvas")) == 1)
         check("палитра карандаша", len(driver.find_elements(By.CSS_SELECTOR, ".draw-color")) >= 6)
         from selenium.webdriver.common.action_chains import ActionChains
@@ -411,6 +418,67 @@ def main():
         check("живой эфир помечен", len(driver.find_elements(By.CSS_SELECTOR, ".post .live-tag")) >= 1)
         shot(driver, "13-live")
 
+        # уведомления: второй лайкует, комментирует и пишет в лс -> точки на вкладках
+        feed_api = c.get("/api/feed", headers=h).json()
+        mine_post = next((p for p in feed_api["items"] if p["user"]["username"] == U), None)
+        check("свой пост найден для уведомлений", bool(mine_post))
+        c.post(f"/api/video/{mine_post['id']}/like", headers=h2)
+        c.post(f"/api/video/{mine_post['id']}/comments", headers=h2, data={"text": "nice!"})
+        dm2 = c.post("/api/chats/dm", headers=h2, json={"username": U}).json()
+        c.post(f"/api/chats/{dm2['id']}/send", headers=h2,
+               data={"text": "привет из теста", "kind": "text"})
+        driver.refresh()
+        wait(driver, "#tabbar .tab", 20)
+        try:
+            WebDriverWait(driver, 20).until(lambda d: d.find_element(
+                By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
+            WebDriverWait(driver, 20).until(lambda d: d.find_element(
+                By.CSS_SELECTOR, "#tabbar [data-dot=chats]").is_displayed())
+        except Exception:
+            pass
+        check("точка уведомлений на «Профиле»",
+              driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
+        check("точка непрочитанных на «Общении»",
+              driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=chats]").is_displayed())
+        shot(driver, "26-badges")
+
+        driver.find_element(By.CSS_SELECTOR, '#tabbar .tab[data-tab=profile]').click()
+        wait(driver, ".prof-user", 20)
+        check("колокольчик в профиле",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-notifs]")) == 1)
+        driver.find_element(By.CSS_SELECTOR, "[data-notifs]").click()
+        wait_hash(driver, "#/notifs", 10)
+        wait(driver, ".nrow", 15)
+        ntxt = driver.find_element(By.CSS_SELECTOR, "[data-list]").text
+        check("экран уведомлений", len(driver.find_elements(By.CSS_SELECTOR, ".nrow")) >= 3, ntxt)
+        check("в уведомлениях есть лайк", "понравился" in ntxt, ntxt)
+        check("в уведомлениях есть лс", "привет из теста" in ntxt, ntxt)
+        shot(driver, "27-notifs")
+        driver.find_element(By.CSS_SELECTOR, "[data-all]").click()
+        time.sleep(1)
+        check("точка погасла после «Прочитать»",
+              not driver.find_element(By.CSS_SELECTOR, "#tabbar [data-dot=notif]").is_displayed())
+
+        # жалоба на чужой пост из ленты
+        driver.get(BASE + "/#/home")
+        time.sleep(1)
+        rep_btns = driver.find_elements(By.CSS_SELECTOR, ".post [data-report]")
+        check("кнопка «Пожаловаться» в ленте", len(rep_btns) >= 1, len(rep_btns))
+        rep_btns[0].click()
+        wait(driver, ".sheet .rep-opt", 10)
+        check("причины жалобы показаны",
+              len(driver.find_elements(By.CSS_SELECTOR, ".sheet .rep-opt")) == 5)
+        shot(driver, "28-report")
+        driver.find_element(By.CSS_SELECTOR, ".sheet .rep-opt").click()
+        try:
+            WebDriverWait(driver, 12).until(lambda d: "Жалоба отправлена" in
+                                            d.find_element(By.CSS_SELECTOR, "#toast").text)
+        except Exception:
+            pass
+        check("жалоба отправлена",
+              "Жалоба отправлена" in driver.find_element(By.CSS_SELECTOR, "#toast").text)
+        time.sleep(0.5)
+
         # настройки профиля и темы оформления
         driver.get(BASE + "/#/profile/" + U)
         time.sleep(1.5)
@@ -455,6 +523,13 @@ def main():
         time.sleep(0.5)
         check("тёмная тема включена",
               driver.execute_script("return document.documentElement.dataset.theme") == "dark")
+        check("кнопки уведомлений и данных в настройках",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-push]")) == 1
+              and len(driver.find_elements(By.CSS_SELECTOR, "[data-export]")) == 1
+              and len(driver.find_elements(By.CSS_SELECTOR, "[data-del]")) == 1
+              and len(driver.find_elements(By.CSS_SELECTOR, "[data-opennotifs]")) == 1)
+        check("жалобы скрыты от обычного юзера",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-reports]")) == 0)
 
         # админ: отдельного раздела нет, всё — кнопкой в профиле человека
         driver.execute_script("localStorage.removeItem('potatos_token');location.reload()")
@@ -525,6 +600,105 @@ def main():
         time.sleep(2.5)
         check("блокировка снята",
               len(driver.find_elements(By.CSS_SELECTOR, '[data-adm]')) == 1)
+
+        # очередь жалоб: раздел в настройках администратора
+        driver.get(BASE + "/#/profile/dmitriy444")
+        wait(driver, ".prof-user", 20)
+        driver.find_element(By.CSS_SELECTOR, "[data-settings]").click()
+        wait(driver, "[data-reports]", 15)
+        check("раздел «Жалобы» у администратора", True)
+        check("счётчик жалоб в настройках",
+              len(driver.find_elements(By.CSS_SELECTOR, "[data-reports]")) == 1)
+        rep_row = driver.find_element(By.CSS_SELECTOR, "[data-reports]")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", rep_row)
+        time.sleep(0.4)
+        driver.execute_script("arguments[0].click()", rep_row)
+        wait(driver, ".sheet .rep-row", 15)
+        check("список жалоб показан",
+              len(driver.find_elements(By.CSS_SELECTOR, ".sheet .rep-row")) >= 1)
+        shot(driver, "29-reports")
+        at = c.post("/api/login",
+                    json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()["token"]
+        ah = {"Authorization": "Bearer " + at}
+        open_ids = [r["id"] for r in c.get("/api/admin/reports", headers=ah).json()["items"]]
+        check("наша жалоба в очереди", bool(open_ids))
+        WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".sheet .rep-row [data-del]")))
+        driver.find_element(By.CSS_SELECTOR, ".sheet .rep-row [data-del]").click()
+        wait(driver, ".modal [data-yes]", 12)
+        time.sleep(0.4)
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-yes]").click()
+        try:
+            WebDriverWait(driver, 15).until(lambda d: "Контент удалён" in
+                                            d.find_element(By.CSS_SELECTOR, "#toast").text)
+        except Exception:
+            pass
+        check("жалоба обработана (тост)",
+              "Контент удалён" in driver.find_element(By.CSS_SELECTOR, "#toast").text)
+        time.sleep(1)
+        rep2 = driver.find_element(By.CSS_SELECTOR, "[data-reports]")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", rep2)
+        time.sleep(0.4)
+        driver.execute_script("arguments[0].click()", rep2)
+        try:
+            WebDriverWait(driver, 15).until(lambda d: d.find_elements(
+                By.CSS_SELECTOR, ".sheet .sh-body")
+                and d.find_element(By.CSS_SELECTOR, ".sheet .sh-body").text.strip() != "")
+        except Exception:
+            pass
+        time.sleep(0.5)
+        shot(driver, "29b-reports-done")
+        api_open = [r["id"] for r in c.get("/api/admin/reports", headers=ah).json()["items"]]
+        dom_ids = [int(x) for x in driver.execute_script(
+            "return [...document.querySelectorAll('.sheet .rep-row')].map(r=>+r.dataset.id)")]
+        check("рассмотренная жалоба ушла из очереди",
+              len(api_open) < len(open_ids)
+              and all(i not in dom_ids for i in open_ids if i not in api_open),
+              {"api_open": api_open, "dom": dom_ids})
+        shot(driver, "29b-reports-done")
+        driver.execute_script("Overlay.close()")
+        time.sleep(0.6)
+
+        # финал: свежий аккаунт -> удаление аккаунта через настройки
+        driver.execute_script("localStorage.removeItem('potatos_token');location.reload()")
+        time.sleep(2.5)
+        wait(driver, ".auth", 15)
+        U3 = "del" + s
+        driver.find_element(By.CSS_SELECTOR, "[data-mode=reg]").click()
+        time.sleep(0.3)
+        driver.find_element(By.CSS_SELECTOR, "[name=nickname]").send_keys("Удаляемый")
+        driver.find_element(By.CSS_SELECTOR, "[name=username]").send_keys(U3)
+        driver.find_element(By.CSS_SELECTOR, "[name=password]").send_keys("6789")
+        driver.find_element(By.CSS_SELECTOR, "[data-go]").click()
+        wait(driver, "#tabbar .tab", 15)
+        check("третий аккаунт зарегистрирован",
+              driver.execute_script("return App.me && App.me.username") == U3)
+        token3 = driver.execute_script("return App.token")
+        h3 = {"Authorization": "Bearer " + token3}
+        c.post("/api/upload", headers=h3, files={"file": ("d.jpg", img((60, 90, 200)), "image/jpeg")},
+               data={"caption": "моя публикация"})
+        ex3 = c.get("/api/me/export", headers=h3).json()
+        check("выгрузка данных (JSON)",
+              ex3["profile"]["username"] == U3 and len(ex3["posts"]) == 1, ex3)
+        driver.get(BASE + "/#/profile/" + U3)
+        wait(driver, "[data-settings]", 20)
+        driver.find_element(By.CSS_SELECTOR, "[data-settings]").click()
+        wait(driver, "[data-del]", 15)
+        del_btn = driver.find_element(By.CSS_SELECTOR, "[data-del]")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", del_btn)
+        time.sleep(0.4)
+        driver.execute_script("arguments[0].click()", del_btn)
+        wait(driver, ".modal [data-pw]", 12)
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-pw]").send_keys("6789")
+        time.sleep(0.3)
+        driver.find_element(By.CSS_SELECTOR, ".modal [data-yes]").click()
+        wait_hash(driver, "#/auth", 15)
+        check("аккаунт удалён из интерфейса",
+              driver.execute_script("return !App.me && !App.token"))
+        check("удалённого юзера нет",
+              c.post("/api/login", json={"username": U3, "password": "6789"}).status_code == 400)
+        shot(driver, "30-deleted")
+        time.sleep(1)
 
         driver.get(BASE + "/#/chats")
         time.sleep(1)

@@ -161,6 +161,58 @@ function requireAuth() {
   return true;
 }
 
+/* ---------------- уведомления: точки на вкладках + звук ---------------- */
+const Badges = {
+  notif: 0, chatUnread: 0,
+  setNotif(n) { this.notif = Math.max(0, n | 0); this.paint(); },
+  setChats(n) { this.chatUnread = Math.max(0, n | 0); this.paint(); },
+  paint() {
+    const set = (sel, on) => $$(sel).forEach(el => { el.hidden = !on; });
+    set('[data-dot=notif]', this.notif);
+    set('[data-dot=chats]', this.chatUnread);
+  },
+  async load() {
+    if (!App.token) { this.setNotif(0); this.setChats(0); return; }
+    try {
+      const d = await api('/api/unread', { silent: true });
+      this.setNotif(d.notifications);
+      this.setChats(d.chats);
+    } catch (e) { }
+  }
+};
+
+/* короткий сигнал, когда пришло уведомление */
+function ping() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!App._ac) App._ac = new AC();
+    const ac = App._ac;
+    if (ac.state === 'suspended') ac.resume();
+    const t0 = ac.currentTime;
+    [0, 0.13].forEach((off, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.value = i ? 1318 : 880;
+      g.gain.setValueAtTime(0.0001, t0 + off);
+      g.gain.exponentialRampToValueAtTime(0.2, t0 + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.4);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t0 + off); o.stop(t0 + off + 0.45);
+    });
+  } catch (e) { }
+}
+
+/* ключ push-подписки: base64url -> Uint8Array */
+function urlB64ToUint8(v) {
+  const s = (v || '').replace(/-/g, '+').replace(/_/g, '/');
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const bin = atob(s + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 /* ---------------- overlays ---------------- */
 const Overlay = {
   current: null,
@@ -252,7 +304,10 @@ function renderTabbar(active) {
     let inner = `<span class="ic">${t.ic}</span>`;
     if (t.id === 'profile' && App.me && App.me.avatar)
       inner = `<img class="ava" src="${esc(mediaURL(App.me.avatar))}" onerror="App.avaFail(this)">`;
-    return `<button class="tab${on}" data-tab="${t.id}">${inner}<span>${t.label}</span></button>`;
+    let dot = '';
+    if (t.id === 'chats') dot = `<i class="tab-dot" data-dot="chats"${Badges.chatUnread ? '' : ' hidden'}></i>`;
+    if (t.id === 'profile') dot = `<i class="tab-dot" data-dot="notif"${Badges.notif ? '' : ' hidden'}></i>`;
+    return `<button class="tab${on}" data-tab="${t.id}">${inner}<span>${t.label}</span>${dot}</button>`;
   }).join('');
   $$('.tab', bar).forEach(b => b.onclick = () => {
     const t = b.dataset.tab;
@@ -263,7 +318,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '10';
+const ASSET_V = '11';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -313,7 +368,7 @@ async function render() {
   screen.innerHTML = '';
   const noNav = ['chat'].includes(r.name);
   screen.classList.toggle('no-nav', noNav);
-  const activeTab = ['profile', 'settings', 'edit'].includes(r.name) ? 'profile' : r.name;
+  const activeTab = ['profile', 'settings', 'edit', 'notifs'].includes(r.name) ? 'profile' : r.name;
   if (noNav) hideTabbar(); else renderTabbar(activeTab);
   try { await view(screen, r); }
   catch (e) {
@@ -340,6 +395,14 @@ function connectWS() {
 
 function handleWSEvent(d) {
   if (window.Chats) Chats.onEvent(d);
+  if (d.type === 'notify') {
+    Badges.setNotif(d.unread);
+    ping();
+    if (d.item && d.item.title) toast(d.item.title);
+  } else if (d.type === 'message') {
+    clearTimeout(Badges._t);
+    Badges._t = setTimeout(() => Badges.load(), 700);
+  }
 }
 
 /* ---------------- auth screen ---------------- */
@@ -392,6 +455,7 @@ views.auth = async function (screen) {
       setToken(d.token);
       App.me = d.user;
       connectWS();
+      Badges.load();
       navigate('#/home');
     } catch (e) { }
     btn.disabled = false;
@@ -414,9 +478,13 @@ App.start = async function () {
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('/static/sw.js').catch(() => { });
   }
+  // звук уведомлений включается после первого касания (правило автоплея)
+  document.addEventListener('pointerdown', () => {
+    if (App._ac && App._ac.state === 'suspended') App._ac.resume();
+  }, { once: true });
   window.addEventListener('hashchange', render);
   await loadMe();
-  if (App.me) connectWS();
+  if (App.me) { connectWS(); Badges.load(); }
   render();
   setInterval(() => { if (App.ws && App.ws.readyState === 1) App.ws.send(JSON.stringify({ type: 'ping' })); }, 25000);
 };
@@ -437,3 +505,4 @@ window.navigate = navigate; window.views = views;
 window.requireAuth = requireAuth; window.logoutLocal = logoutLocal;
 window.connectWS = connectWS; window.loadMe = loadMe; window.render = render;
 window.hideTabbar = hideTabbar; window.renderTabbar = renderTabbar;
+window.Badges = Badges; window.ping = ping; window.urlB64ToUint8 = urlB64ToUint8;
