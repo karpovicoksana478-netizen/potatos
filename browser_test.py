@@ -112,7 +112,10 @@ def main():
             c.post("/api/upload", headers=h, files={"file": ("v.jpg", img(col), "image/jpeg")},
                    data={"caption": "тестовая публикация #" + s, "sound": "оригинальный звук"})
         driver.get(BASE + "/#/home")
-        time.sleep(2)
+        try:
+            WebDriverWait(driver, 25).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".post")) >= 3)
+        except Exception:
+            pass
         posts = driver.find_elements(By.CSS_SELECTOR, ".post")
         check("лента показывает посты", len(posts) >= 3, len(posts))
         check("в ленте есть действия (лайк/коммент)",
@@ -130,7 +133,11 @@ def main():
 
         # лайк
         driver.find_element(By.CSS_SELECTOR, ".post [data-like]").click()
-        time.sleep(0.8)
+        try:
+            WebDriverWait(driver, 12).until(lambda d: d.execute_script(
+                "return !!document.querySelector('.post [data-like].liked')"))
+        except Exception:
+            pass
         check("лайк поставился", driver.execute_script(
             "return document.querySelector('.post [data-like]').classList.contains('liked')"))
 
@@ -162,6 +169,10 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "#tabbar .tab[data-tab=profile]").click()
         wait(driver, ".prof-user", 20)
         check("профиль открыт", driver.find_element(By.CSS_SELECTOR, ".prof-user").text == "@" + U)
+        try:
+            WebDriverWait(driver, 25).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".gcell")) >= 3)
+        except Exception:
+            pass
         check("сетка видео", len(driver.find_elements(By.CSS_SELECTOR, ".gcell")) >= 3)
         shot(driver, "05-profile")
 
@@ -186,7 +197,11 @@ def main():
 
         # поиск людей
         driver.find_element(By.CSS_SELECTOR, "[data-q]").send_keys(U)
-        time.sleep(1.2)
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: U in d.find_element(By.CSS_SELECTOR, "[data-results]").text)
+        except Exception:
+            pass
         check("поиск нашёл пользователя",
               U in driver.find_element(By.CSS_SELECTOR, "[data-results]").text)
         shot(driver, "08-search")
@@ -458,6 +473,10 @@ def main():
         driver.find_element(By.CSS_SELECTOR, "[data-publish]").click()
         wait_hash(driver, "#/home", 30)
         check("эфир опубликован", driver.execute_script("return location.hash") == "#/home")
+        try:
+            WebDriverWait(driver, 25).until(lambda d: d.find_elements(By.CSS_SELECTOR, ".post video"))
+        except Exception:
+            pass
         vids = driver.find_elements(By.CSS_SELECTOR, ".post video")
         check("в ленте есть видео", len(vids) >= 1, len(vids))
         check("живой эфир помечен", len(driver.find_elements(By.CSS_SELECTOR, ".post .live-tag")) >= 1)
@@ -482,6 +501,10 @@ def main():
         time.sleep(2)
         check("тема сохранилась после перезагрузки",
               driver.execute_script("return document.documentElement.dataset.theme") == "light")
+        try:
+            WebDriverWait(driver, 25).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".post")) >= 3)
+        except Exception:
+            pass
         check("светлая лента отрисована",
               len(driver.find_elements(By.CSS_SELECTOR, ".post")) >= 3)
         shot(driver, "19-feed-light")
