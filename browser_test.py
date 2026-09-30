@@ -111,7 +111,8 @@ def main():
         for col in [(255, 200, 60), (90, 200, 160), (240, 110, 140)]:
             c.post("/api/upload", headers=h, files={"file": ("v.jpg", img(col), "image/jpeg")},
                    data={"caption": "тестовая публикация #" + s, "sound": "оригинальный звук"})
-        driver.get(BASE + "/#/home")
+        driver.refresh()
+        wait(driver, "#tabbar .tab", 25)
         try:
             WebDriverWait(driver, 25).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".post")) >= 3)
         except Exception:
