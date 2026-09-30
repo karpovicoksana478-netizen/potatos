@@ -29,6 +29,7 @@ def register(body: dict):
     nickname = (body.get("nickname") or "").strip()
     username = (body.get("username") or "").strip().lstrip("@")
     password = body.get("password") or ""
+    device_id = (body.get("device_id") or "").strip()[:64]
     if not nickname or len(nickname) > 32:
         raise HTTPException(400, "Введите ник (до 32 символов)")
     if not USERNAME_RE.match(username):
@@ -37,8 +38,14 @@ def register(body: dict):
         raise HTTPException(400, "Пароль от 4 символов")
     if db.one("SELECT 1 x FROM users WHERE username=?", (username,)):
         raise HTTPException(400, "Такой юзернейм занят")
-    uid = db.run("INSERT INTO users (username, nickname, password, created_at) VALUES (?,?,?,?)",
-                 (username, nickname, auth.hash_password(password), db.now()))
+    # одно устройство — максимум три аккаунта
+    if device_id:
+        cnt = db.one("SELECT COUNT(*) c FROM users WHERE device_id=?", (device_id,))["c"]
+        if cnt >= 3:
+            raise HTTPException(400, "С этого устройства уже зарегистрировано 3 аккаунта")
+    uid = db.run(
+        "INSERT INTO users (username, nickname, password, device_id, created_at) VALUES (?,?,?,?,?)",
+        (username, nickname, auth.hash_password(password), device_id, db.now()))
     db.run("UPDATE users SET last_seen=? WHERE id=?", (db.now(), uid))
     token = auth.create_token(uid)
     user = db.one("SELECT * FROM users WHERE id=?", (uid,))

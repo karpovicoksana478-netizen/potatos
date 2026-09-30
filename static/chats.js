@@ -109,7 +109,7 @@ views.chats = async function (screen) {
     <div class="topbar">
       <div class="searchbar">
         <span class="ic">🔍</span>
-        <input data-q placeholder="Поиск людей, каналов и групп" autocapitalize="none">
+        <input data-q placeholder="Поиск людей" autocapitalize="none">
         <button data-clearq style="color:var(--muted);font-size:17px" hidden>✕</button>
       </div>
     </div>
@@ -144,12 +144,12 @@ views.chats = async function (screen) {
     try {
       const d = await api('/api/search?q=' + encodeURIComponent(term));
       const users = d.users;
-      if (!users.length && !d.chats.length) {
-        results.innerHTML = `<div class="empty"><div class="ic">🔍</div><div>Ничего не найдено<br><span class="muted">попробуйте другой запрос</span></div></div>`;
+      if (!users.length) {
+        results.innerHTML = `<div class="empty"><div class="ic">🔍</div><div>Никого не нашли<br><span class="muted">попробуйте другой запрос</span></div></div>`;
         return;
       }
       results.innerHTML = `
-        ${users.length ? `<div class="lbl" style="padding:14px 16px 4px;margin:0">Люди</div>` : ''}
+        <div class="lbl" style="padding:14px 16px 4px;margin:0">Люди</div>
         ${users.map(u => `<div class="list-item" data-user="${esc(u.username)}">
             ${ava(u.avatar)}
             <div style="flex:1;min-width:0">
@@ -157,28 +157,9 @@ views.chats = async function (screen) {
               <div class="muted" style="font-size:13px">@${esc(u.username)}</div>
             </div>
             <button class="btn sm ghost" data-open="${esc(u.username)}">Профиль</button>
-          </div>`).join('')}
-        ${d.chats.length ? `<div class="lbl" style="padding:14px 16px 4px;margin:0">Каналы и группы</div>` : ''}
-        ${d.chats.map(c => `<div class="list-item" data-openchat="${c.id}">
-            ${ava(c.avatar)}
-            <div style="flex:1;min-width:0">
-              <div style="font-weight:600">${esc(c.title)} ${c.type === 'channel' ? '📢' : '👥'}</div>
-              <div class="muted" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.description || people(c.members_count))}</div>
-            </div>
-            <button class="btn sm" data-join="${c.id}">${c.joined ? 'Открыть' : 'Вступить'}</button>
           </div>`).join('')}`;
       $$('[data-user]', results).forEach(el => el.onclick = () => navigate('#/profile/' + el.dataset.user));
       $$('[data-open]', results).forEach(el => el.onclick = e => { e.stopPropagation(); navigate('#/profile/' + el.dataset.open); });
-      $$('[data-join]', results).forEach(el => el.onclick = async e => {
-        e.stopPropagation();
-        const id = el.dataset.join;
-        const c = Chats.list.find(x => x.id === +id);
-        try {
-          if (!(c && c.joined)) await api(`/api/chats/${id}/join`, { method: 'POST' });
-          navigate('#/chat/' + id);
-        } catch (err) { }
-      });
-      $$('[data-openchat]', results).forEach(el => el.onclick = () => navigate('#/chat/' + el.dataset.openchat));
     } catch (e) { results.innerHTML = ''; }
   }, 320);
 

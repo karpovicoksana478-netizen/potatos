@@ -138,6 +138,16 @@ function logoutLocal() {
   localStorage.removeItem('potatos_token');
   if (App.ws) { try { App.ws.close(); } catch (e) { } App.ws = null; }
 }
+/* id этого устройства — сервер разрешает максимум 3 аккаунта на него */
+function deviceId() {
+  let d = localStorage.getItem('potatos_device');
+  if (!d) {
+    d = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+      : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('potatos_device', d);
+  }
+  return d;
+}
 async function loadMe() {
   if (!App.token) return null;
   try {
@@ -253,7 +263,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '8';
+const ASSET_V = '9';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -372,6 +382,7 @@ views.auth = async function (screen) {
   const go = async () => {
     const f = n => $(`[name=${n}]`, screen).value.trim();
     const body = { username: f('username'), password: f('password'), nickname: f('nickname') };
+    if (mode === 'reg') body.device_id = deviceId();
     if (!body.username || !body.password) { toast('Заполните юзернейм и пароль'); return; }
     if (mode === 'reg' && !body.nickname) { toast('Введите ник'); return; }
     const btn = $('[data-go]', screen);

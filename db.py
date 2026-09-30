@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS users (
   banned_until INTEGER NOT NULL DEFAULT 0,
   posts_banned_until INTEGER NOT NULL DEFAULT 0,
   last_seen INTEGER NOT NULL DEFAULT 0,
+  device_id TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tokens (
@@ -158,6 +159,7 @@ def _migrate():
         ("posts_banned_until",
          "ALTER TABLE users ADD COLUMN posts_banned_until INTEGER NOT NULL DEFAULT 0"),
         ("last_seen", "ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0"),
+        ("device_id", "ALTER TABLE users ADD COLUMN device_id TEXT NOT NULL DEFAULT ''"),
     ):
         if col not in uhave:
             db().execute(sql)

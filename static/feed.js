@@ -477,7 +477,8 @@ function createFeed(root, opts = {}) {
 }
 
 /* ---------------- карандаш: рисование поверх фото/видео ---------------- */
-function drawEditor(src, isVideo, cb) {
+/* seedURL — уже наложенный слой (текст/рисунок), поверх которого продолжаем рисовать */
+function drawEditor(src, isVideo, cb, seedURL) {
   const modal = document.createElement('div');
   modal.className = 'draw-modal';
   modal.innerHTML = `
@@ -567,20 +568,354 @@ function drawEditor(src, isVideo, cb) {
     }
   };
 
-  // база: для фото — сама картинка, для видео — только кадр для размеров
-  const probe = new Image();
-  probe.onload = () => {
-    base = isVideo ? null : probe;
-    sizeCanvas(probe.naturalWidth || 720, probe.naturalHeight || 1280);
-  };
-  if (isVideo) {
+  // база: для фото — сама картинка; для видео — кадр (для размеров) или уже наложенный слой
+  const sizeFromVideo = () => {
     const v = document.createElement('video');
     v.muted = true; v.playsInline = true; v.preload = 'metadata'; v.src = src;
     v.onloadedmetadata = () => { sizeCanvas(v.videoWidth || 720, v.videoHeight || 1280); v.src = ''; };
     v.onerror = () => sizeCanvas(720, 1280);
+  };
+  const probe = new Image();
+  probe.onload = () => {
+    base = isVideo && !seedURL ? null : probe;
+    sizeCanvas(probe.naturalWidth || 720, probe.naturalHeight || 1280);
+  };
+  if (isVideo && seedURL) {
+    probe.onerror = () => { base = null; sizeFromVideo(); };
+    probe.src = seedURL;
+  } else if (isVideo) {
+    sizeFromVideo();
   } else {
     probe.src = src;
   }
+}
+
+/* ---------------- редактор перед публикацией (как в TikTok) ---------------- */
+/* [ключ, подпись, CSS-фильтр] — ключи совпадают с FILTERS в edit.py */
+const ED_FILTERS = [
+  ['none', 'Оригинал', 'none'],
+  ['vivid', 'Яркий', 'contrast(1.15) saturate(1.55) brightness(1.02)'],
+  ['warm', 'Тёплый', 'sepia(.2) saturate(1.35) hue-rotate(-8deg)'],
+  ['cold', 'Холодный', 'saturate(1.1) hue-rotate(12deg) brightness(1.03)'],
+  ['bw', 'Ч/Б', 'grayscale(1)'],
+  ['vintage', 'Винтаж', 'sepia(.45) contrast(1.05) saturate(.72)'],
+  ['fade', 'Выцветший', 'contrast(.92) saturate(.85) brightness(1.05)'],
+];
+const edFilterCss = key => (ED_FILTERS.find(f => f[0] === key) || ED_FILTERS[0])[2];
+
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error('image'));
+    i.src = url;
+  });
+}
+
+/* фото: запекаем выбранный фильтр в файл (для видео его применит сервер) */
+async function bakeFilter(file, css) {
+  try {
+    const url = URL.createObjectURL(file);
+    const img = await loadImg(url);
+    const cv = document.createElement('canvas');
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.filter = css;
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92));
+    if (!blob) return file;
+    const name = (file.name || 'photo').replace(/\.[a-z0-9]+$/i, '') + '.jpg';
+    return new File([blob], name, { type: 'image/jpeg' });
+  } catch (e) { return file; }
+}
+
+/* текст поверх фото или в слое видео: двигаем пальцем, жмём «Готово» */
+function textEditor(opts, cb) {
+  const isVideo = !!opts.isVideo;
+  const modal = document.createElement('div');
+  modal.className = 'draw-modal';
+  modal.innerHTML = `
+    <div class="draw-top">
+      <button class="btn sm ghost" data-cancel>✕ Отмена</button>
+      <b>Текст</b>
+      <button class="btn sm" data-ok>✓ Готово</button>
+    </div>
+    <div class="draw-stage"><canvas data-canvas></canvas></div>
+    <div class="txt-tools">
+      <input class="field" data-txt maxlength="80" placeholder="Надпись на видео или фото">
+      <div class="draw-colors">
+        ${['#ffffff', '#ffe14d', '#ff5a5a', '#4dc3ff', '#7cff6b', '#000000']
+      .map((c, i) => `<button class="draw-color ${i ? '' : 'on'}" data-color="${c}" style="background:${c}"></button>`).join('')}
+      </div>
+      <div class="ed-row" style="margin:0">
+        <span class="muted" style="font-size:13px">Размер</span>
+        <input type="range" min="5" max="30" value="14" data-tsize>
+      </div>
+      <div class="muted" style="font-size:12px">Перетаскивайте текст по экрану</div>
+    </div>`;
+  document.body.appendChild(modal);
+  const cv = $('[data-canvas]', modal), ctx = cv.getContext('2d');
+  const txt = $('[data-txt]', modal);
+  let base = null, color = '#ffffff', size = 14, x = 0.5, y = 0.5, dirty = false;
+  const close = () => { modal.remove(); document.removeEventListener('keydown', onKey); };
+  const finish = b => { close(); cb && cb(b); };
+  const onKey = e => { if (e.key === 'Escape') finish(null); };
+  document.addEventListener('keydown', onKey);
+  $('[data-cancel]', modal).onclick = () => finish(null);
+
+  function sizeCanvas(w, h) {
+    const max = 1280;
+    const k = Math.min(1, max / Math.max(w, h));
+    cv.width = Math.max(1, Math.round(w * k));
+    cv.height = Math.max(1, Math.round(h * k));
+    redraw();
+  }
+  function redraw() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (base) ctx.drawImage(base, 0, 0, cv.width, cv.height);
+    const t = txt.value.trim();
+    if (!t) return;
+    const px = Math.round((size / 100) * cv.height) || 28;
+    ctx.font = `700 ${px}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(2, px / 7);
+    ctx.strokeStyle = 'rgba(0,0,0,.55)';
+    ctx.strokeText(t, x * cv.width, y * cv.height);
+    ctx.fillStyle = color;
+    ctx.fillText(t, x * cv.width, y * cv.height);
+    dirty = true;
+  }
+  const pos = e => {
+    const r = cv.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  let drag = false;
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = true;
+    const p = pos(e); x = Math.min(1, Math.max(0, p[0])); y = Math.min(1, Math.max(0, p[1]));
+    redraw();
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const p = pos(e); x = Math.min(1, Math.max(0, p[0])); y = Math.min(1, Math.max(0, p[1]));
+    redraw();
+  });
+  const up = () => { drag = false; };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+
+  txt.oninput = redraw;
+  $('[data-tsize]', modal).oninput = e => { size = +e.target.value; redraw(); };
+  $$('[data-color]', modal).forEach(b => b.onclick = () => {
+    color = b.dataset.color;
+    $$('[data-color]', modal).forEach(c => c.classList.toggle('on', c === b));
+    redraw();
+  });
+  $('[data-ok]', modal).onclick = () => {
+    if (!txt.value.trim()) return finish(null);
+    cv.toBlob(b => finish(b), isVideo ? 'image/png' : 'image/jpeg', 0.95);
+  };
+
+  (async () => {
+    const srcImg = isVideo ? opts.baseOverlayURL : opts.url;
+    if (srcImg) {
+      try { base = await loadImg(srcImg); } catch (e) { base = null; }
+    }
+    if (base) sizeCanvas(base.naturalWidth, base.naturalHeight);
+    else if (isVideo) {
+      const v = document.createElement('video');
+      v.muted = true; v.preload = 'metadata'; v.src = opts.url;
+      v.onloadedmetadata = () => sizeCanvas(v.videoWidth || 720, v.videoHeight || 1280);
+      v.onerror = () => sizeCanvas(720, 1280);
+    } else {
+      const i = await loadImg(opts.url).catch(() => null);
+      if (i) sizeCanvas(i.naturalWidth, i.naturalHeight); else sizeCanvas(720, 1280);
+    }
+    redraw();
+    txt.focus();
+  })();
+}
+
+/* полноэкранный редактор: обрезка, фильтры, рисунок, текст -> «Далее» -> публикация */
+function openEditor(inputFile, done) {
+  const isVideo = inputFile.type.startsWith('video/');
+  const st = {
+    file: inputFile, isVideo, url: URL.createObjectURL(inputFile),
+    dur: 0, t0: 0, t1: 0, filter: 'none',
+    overlay: null, overlayURL: null,
+    tool: isVideo ? 'trim' : 'filter',
+  };
+  const node = document.createElement('div');
+  node.className = 'editor';
+  node.innerHTML = `
+    <div class="ed-top">
+      <button class="btn sm ghost" data-edx>✕ Отмена</button>
+      <b>Редактор</b>
+      <button class="btn sm" data-ednext>Далее →</button>
+    </div>
+    <div class="ed-stage">
+      <div class="ed-box">
+        ${isVideo
+      ? `<video class="ed-media" src="${st.url}" playsinline muted loop controls></video>`
+      : `<img class="ed-media" src="${st.url}" alt="">`}
+        <img class="ed-ov" data-ov hidden alt="">
+      </div>
+    </div>
+    <div class="ed-panel" data-panel></div>
+    <div class="ed-tools">
+      ${isVideo ? '<button class="ed-tool" data-et="trim">✂️<span>Обрезать</span></button>' : ''}
+      <button class="ed-tool" data-et="filter">🎨<span>Фильтры</span></button>
+      <button class="ed-tool" data-et="draw">✏️<span>Рисовать</span></button>
+      <button class="ed-tool" data-et="text">🅣<span>Текст</span></button>
+    </div>`;
+  document.body.appendChild(node);
+
+  const media = $('.ed-media', node);
+  const panel = $('[data-panel]', node);
+  const ovImg = $('[data-ov]', node);
+  const close = () => {
+    URL.revokeObjectURL(st.url);
+    if (st.overlayURL) URL.revokeObjectURL(st.overlayURL);
+    node.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const cancel = () => { close(); };
+  const onKey = e => { if (e.key === 'Escape') cancel(); };
+  document.addEventListener('keydown', onKey);
+  $('[data-edx]', node).onclick = cancel;
+
+  const applyFilter = () => { media.style.filter = edFilterCss(st.filter); };
+  const paintOverlay = () => {
+    if (st.overlayURL) { ovImg.src = st.overlayURL; ovImg.hidden = false; }
+    else ovImg.hidden = true;
+  };
+
+  function setTool(t) {
+    st.tool = t;
+    $$('[data-et]', node).forEach(b => b.classList.toggle('on', b.dataset.et === t));
+    if (t === 'filter') {
+      panel.innerHTML = `<div class="fchips">
+        ${ED_FILTERS.map(([k, label]) =>
+        `<button class="fchip${k === st.filter ? ' on' : ''}" data-f="${k}">${label}</button>`).join('')}
+      </div>`;
+      $$('[data-f]', panel).forEach(b => b.onclick = () => {
+        st.filter = b.dataset.f;
+        $$('[data-f]', panel).forEach(x => x.classList.toggle('on', x === b));
+        applyFilter();
+      });
+    } else if (t === 'trim') {
+      panel.innerHTML = `
+        <div class="ed-row"><span class="muted" style="font-size:13px">Начало</span>
+          <input type="range" data-t0 min="0" max="0" step="0.1" value="0">
+          <span class="t" data-t0lab>0:00</span></div>
+        <div class="ed-row"><span class="muted" style="font-size:13px">Конец</span>
+          <input type="range" data-t1 min="0" max="0" step="0.1" value="0">
+          <span class="t" data-t1lab>0:00</span></div>
+        <div class="muted" style="font-size:12px">Оставьте нужный кусок ролика</div>`;
+      const r0 = $('[data-t0]', panel), r1 = $('[data-t1]', panel);
+      const lab = fmtT;
+      const sync = () => {
+        st.t0 = Math.max(0, +r0.value);
+        st.t1 = Math.max(st.t0 + 0.2, +r1.value);
+        r1.value = st.t1;
+        $('[data-t0lab]', panel).textContent = lab(st.t0);
+        $('[data-t1lab]', panel).textContent = lab(st.t1);
+        if (media.currentTime < st.t0) media.currentTime = st.t0;
+      };
+      r0.oninput = sync; r1.oninput = sync;
+      if (st.dur > 0) {
+        r0.max = r1.max = st.dur.toFixed(2);
+        r1.value = st.dur; r0.value = 0;
+        sync();
+      }
+    } else if (t === 'draw') {
+      drawEditor(st.url, isVideo, blob => {
+        if (!blob) { setTool(isVideo ? 'trim' : 'filter'); return; }
+        if (isVideo) {
+          if (st.overlayURL) URL.revokeObjectURL(st.overlayURL);
+          st.overlay = blob;
+          st.overlayURL = URL.createObjectURL(blob);
+          paintOverlay();
+          toast('Рисунок наложится при публикации');
+        } else {
+          st.file = blob;
+          URL.revokeObjectURL(st.url);
+          st.url = URL.createObjectURL(blob);
+          media.src = st.url;
+          toast('Рисунок наложен на фото');
+        }
+        setTool(isVideo ? 'trim' : 'filter');
+      }, st.overlayURL);
+      panel.innerHTML = `<div class="muted" style="font-size:13px">Рисуйте пальцем или мышью…</div>`;
+      return;
+    } else if (t === 'text') {
+      textEditor({ url: st.url, isVideo, baseOverlayURL: st.overlayURL }, blob => {
+        if (blob) {
+          if (isVideo) {
+            if (st.overlayURL) URL.revokeObjectURL(st.overlayURL);
+            st.overlay = blob;
+            st.overlayURL = URL.createObjectURL(blob);
+            paintOverlay();
+          } else {
+            st.file = blob;
+            URL.revokeObjectURL(st.url);
+            st.url = URL.createObjectURL(blob);
+            media.src = st.url;
+          }
+        }
+        setTool(isVideo ? 'trim' : 'filter');
+      });
+      panel.innerHTML = `<div class="muted" style="font-size:13px">Введите текст и перетащите его на место</div>`;
+      return;
+    }
+  }
+  $$('[data-et]', node).forEach(b => b.onclick = () => setTool(b.dataset.et));
+
+  if (isVideo) {
+    media.onloadedmetadata = () => {
+      st.dur = isFinite(media.duration) ? media.duration : 0;
+      if (st.dur <= 0) {
+        // без длительности (запись с камеры) обрезка недоступна
+        const trimBtn = $('[data-et="trim"]', node);
+        if (trimBtn) trimBtn.remove();
+        if (st.tool === 'trim') setTool('filter');
+      } else if (st.tool === 'trim') {
+        setTool('trim');
+      }
+      media.currentTime = 0;
+    };
+    media.ontimeupdate = () => {
+      if (st.t1 > st.t0 && media.currentTime >= st.t1) media.currentTime = st.t0;
+    };
+  }
+  setTool(st.tool);
+
+  $('[data-ednext]', node).onclick = async () => {
+    const btn = $('[data-ednext]', node);
+    if (st.isVideo) {
+      close();
+      done({ file: st.file, filter: st.filter, t0: st.t0, t1: st.t1, overlay: st.overlay });
+      return;
+    }
+    let f = st.file;
+    if (st.filter !== 'none') {
+      btn.disabled = true;
+      f = await bakeFilter(st.file, edFilterCss(st.filter));
+      btn.disabled = false;
+    }
+    close();
+    done({ file: f, filter: '', t0: 0, t1: 0, overlay: null });
+  };
+}
+
+function fmtT(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
 }
 
 /* ---------------- views: home ---------------- */
@@ -602,7 +937,8 @@ views.plus = async function (screen) {
   if (!requireAuth()) return;
   let mode = 'video';
   let file = null, thumbBlob = null, previewURL = null;
-  let drawBlob = null;        // рисунок поверх видео (PNG с прозрачностью)
+  let drawBlob = null, overlayURL = null;  // слой поверх видео (рисунок + текст)
+  let edFilter = '', edT0 = 0, edT1 = 0;   // настройки из редактора
   let recorder = null, chunks = [], recStream = null, recTimer = null, liveBlob = null;
 
   screen.innerHTML = `
@@ -651,14 +987,10 @@ views.plus = async function (screen) {
 
     <div data-preview hidden style="margin-top:16px">
       <div class="spread" style="margin-bottom:10px">
-        <b>Предпросмотр</b>
-        <div class="row" style="gap:8px">
-          <button class="btn sm ghost" data-draw>✏️ Нарисовать</button>
-          <button class="btn sm ghost" data-clear>Убрать</button>
-        </div>
+        <b>Готово к публикации</b>
+        <button class="btn sm ghost" data-clear>Убрать</button>
       </div>
       <div data-holder></div>
-      <div class="inline-note" data-drawnote hidden style="margin-top:10px">✏️ Рисунок будет на фото или поверх видео</div>
       <label class="lbl">Подпись</label>
       <textarea class="field" data-caption maxlength="500" placeholder="Расскажите о видео... #теги"></textarea>
       <label class="lbl">Звук / название трека</label>
@@ -692,52 +1024,50 @@ views.plus = async function (screen) {
   function clearFile() {
     file = null; thumbBlob = null; liveBlob = null;
     drawBlob = null;
-    $('[data-drawnote]', screen).hidden = true;
+    edFilter = ''; edT0 = 0; edT1 = 0;
     if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
+    if (overlayURL) { URL.revokeObjectURL(overlayURL); overlayURL = null; }
     holder.innerHTML = ''; previewBox.hidden = true;
   }
   $('[data-clear]', screen).onclick = () => { clearFile(); stopCam(); };
 
-  async function showFile(f) {
-    if (!f) return;
-    file = f;
-    liveBlob = null;
-    if (previewURL) URL.revokeObjectURL(previewURL);
-    previewURL = URL.createObjectURL(f);
-    if (f.type.startsWith('video/')) {
-      holder.innerHTML = `<video class="preview" src="${previewURL}" controls playsinline muted></video>`;
-      thumbBlob = await videoThumb(f);
+  function paintPreview() {
+    if (!file) { holder.innerHTML = ''; previewBox.hidden = true; return; }
+    const isVideo = file.type.startsWith('video/');
+    const css = isVideo && edFilter && edFilter !== 'none'
+      ? ` style="filter:${edFilterCss(edFilter)}"` : '';
+    if (isVideo) {
+      holder.innerHTML = `<div class="prev-wrap">
+        <video class="preview" src="${previewURL}" controls playsinline muted loop${css}></video>
+        ${overlayURL ? `<img class="prev-ov" src="${overlayURL}" alt="">` : ''}</div>`;
     } else {
       holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">`;
-      thumbBlob = f;
     }
     previewBox.hidden = false;
     previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  $('#f-photo', screen).onchange = e => showFile(e.target.files[0]);
-  $('#f-video', screen).onchange = e => showFile(e.target.files[0]);
-
-  /* ---- карандаш: рисование поверх фото/видео ---- */
-  $('[data-draw]', screen).onclick = () => {
-    if (!file) return toast('Сначала выберите фото или видео');
-    const isVideo = file.type.startsWith('video/');
-    drawEditor(previewURL, isVideo, blob => {
-      if (!blob) return;
-      if (isVideo) {
-        drawBlob = blob;
-        $('[data-drawnote]', screen).hidden = false;
-        toast('Рисунок сохранён — наложится при публикации');
-      } else {
-        file = blob;
-        thumbBlob = blob;
-        URL.revokeObjectURL(previewURL);
-        previewURL = URL.createObjectURL(blob);
-        holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">`;
-        toast('Рисунок наложен на фото');
-      }
+  /* выбор файла -> сразу полноэкранный редактор (как в TikTok) */
+  function showFile(f) {
+    if (!f) return;
+    liveBlob = null;
+    openEditor(f, res => {
+      file = res.file;
+      edFilter = res.filter; edT0 = res.t0; edT1 = res.t1;
+      drawBlob = res.overlay;
+      if (previewURL) URL.revokeObjectURL(previewURL);
+      previewURL = URL.createObjectURL(file);
+      if (overlayURL) { URL.revokeObjectURL(overlayURL); overlayURL = null; }
+      if (drawBlob) overlayURL = URL.createObjectURL(drawBlob);
+      if (file.type.startsWith('video/')) videoThumb(file).then(b => { thumbBlob = b; });
+      else thumbBlob = file;
+      paintPreview();
+      toast('Теперь добавьте подпись и опубликуйте');
     });
-  };
+  }
+
+  $('#f-photo', screen).onchange = e => { showFile(e.target.files[0]); e.target.value = ''; };
+  $('#f-video', screen).onchange = e => { showFile(e.target.files[0]); e.target.value = ''; };
 
   /* ---- камера / эфир ---- */
   const cam = $('[data-cam]', screen);
@@ -825,7 +1155,12 @@ views.plus = async function (screen) {
       const fd = new FormData();
       fd.append('file', file, file.name || 'media');
       if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
-      if (drawBlob && file.type.startsWith('video/')) fd.append('draw', drawBlob, 'draw.png');
+      if (file.type.startsWith('video/')) {
+        if (drawBlob) fd.append('draw', drawBlob, 'draw.png');
+        if (edFilter && edFilter !== 'none') fd.append('filter', edFilter);
+        if (edT0 > 0) fd.append('t0', edT0);
+        if (edT1 > 0) fd.append('t1', edT1);
+      }
       fd.append('caption', caption);
       fd.append('sound', sound);
       if (mode === 'live') fd.append('kind', 'live');

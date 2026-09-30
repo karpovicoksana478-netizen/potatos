@@ -69,6 +69,7 @@ def video_payload(v: dict, me) -> dict:
 async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
                  caption: str = Form(""), sound: str = Form(""), kind: str = Form(""),
                  media: str = Form(""), draw: UploadFile = File(None),
+                 filter: str = Form(""), t0: float = Form(0), t1: float = Form(0),
                  user=Depends(auth.current_user)):
     if db.posts_blocked(user):
         raise HTTPException(403, "Вам запрещено публиковать посты")
@@ -113,6 +114,14 @@ async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
             kind = "live"
         media_path = auth.save_file(data, folder, ext)
 
+    # обрезка и фильтр из редактора (только для видео — фото фильтруется на клиенте)
+    processed = False
+    if folder == "videos" and (filter or t0 > 0 or t1 > 0):
+        from .edit import edit_video
+        new_path = edit_video(media_path, t0, t1, filter)
+        processed = new_path != media_path
+        media_path = new_path
+
     # нарисованное поверх видео (карандаш) — накладываем на сервере
     burned = False
     if draw is not None and draw.filename and folder == "videos":
@@ -128,8 +137,8 @@ async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
         if tdata:
             thumb_url = auth.save_file(tdata, "thumbs", _ext(thumb.filename) or ".jpg")
 
-    # превью: если файла нет (или видео с рисунком) — берём кадр из итогового видео
-    if folder == "videos" and (not thumb_url or burned):
+    # превью: если файла нет (или видео обработали) — берём кадр из итогового видео
+    if folder == "videos" and (not thumb_url or burned or processed):
         from .edit import video_frame
         frame = video_frame(media_path)
         if frame:
