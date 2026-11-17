@@ -313,7 +313,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '12';
+const ASSET_V = '17';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -390,6 +390,7 @@ function connectWS() {
 
 function handleWSEvent(d) {
   if (window.Chats) Chats.onEvent(d);
+  if (d && d.type && d.type.indexOf('live-') === 0 && window.LiveRoom) LiveRoom.onEvent(d);
   if (d.type === 'message' && d.chat && d.chat.type === 'activity') {
     const openHere = App.route.name === 'chat' && +App.route.args[0] === d.chat_id;
     if (!openHere) {

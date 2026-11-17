@@ -59,6 +59,58 @@ function reportSheet(kind, id) {
   });
 }
 
+/* ---------------- поиск видео (кнопка у вкладок сверху ленты) ---------------- */
+function openVideoSearch() {
+  const m = sheet('🔍 Поиск видео', `
+    <input class="field" data-vq placeholder="Название видео..." autocapitalize="none" autocorrect="off" maxlength="80">
+    <div data-vres style="margin-top:10px"></div>`);
+  const input = $('[data-vq]', m);
+  const res = $('[data-vres]', m);
+  const render = items => {
+    if (!items.length) {
+      res.innerHTML = '<div class="inline-note">Ничего не найдено — попробуйте другое название</div>';
+      return;
+    }
+    res.innerHTML = items.map((v, i) => {
+      const img = v.thumb ? '/media/' + esc(v.thumb)
+        : (v.kind === 'photo' ? '/media/' + esc(v.media) : '');
+      const cap = (v.caption || 'Видео').slice(0, 70);
+      return `<div class="list-item" data-idx="${i}" data-vid="${v.id}">
+        ${img ? `<img class="sres-thumb" src="${img}" loading="lazy" alt="">` : '<div class="ava ava-ph">🎬</div>'}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(cap)}</div>
+          <div class="muted" style="font-size:13px">@${esc((v.user && v.user.username) || '?')} · 👁 ${nfmt(v.views)}</div>
+        </div>
+        <button class="btn sm ghost" data-idx="${i}" data-watch>Смотреть</button>
+      </div>`;
+    }).join('');
+    $$('[data-vid]', res).forEach(el => el.onclick = () => {
+      App.searchFeed = items;
+      Overlay.close();
+      navigate('#/sfeed?i=' + el.dataset.idx);
+    });
+    $$('[data-watch]', res).forEach(el => el.onclick = e => {
+      e.stopPropagation();
+      App.searchFeed = items;
+      Overlay.close();
+      navigate('#/sfeed?i=' + el.dataset.idx);
+    });
+  };
+
+  const go = debounce(async () => {
+    const q = input.value.trim();
+    if (!q) { res.innerHTML = ''; return; }
+    res.innerHTML = '<div class="loader"><div class="spin"></div></div>';
+    try {
+      const d = await api('/api/search/videos?q=' + encodeURIComponent(q), { silent: true });
+      render(d.items || []);
+    } catch (e) { res.innerHTML = '<div class="inline-note">Ошибка поиска</div>'; }
+  }, 300);
+  input.oninput = go;
+  input.focus();
+}
+window.openVideoSearch = openVideoSearch;
+
 /* ---------------- comments ---------------- */
 async function openComments(videoId, onCount) {
   const body = sheet('Комментарии', `
@@ -219,7 +271,9 @@ function createFeed(root, opts = {}) {
       <div class="feed-top" data-top style="display:${opts.hideTabs ? 'none' : 'flex'}">
         <span class="t ${st.tab === 'all' ? 'on' : ''}" data-tab="all">Главная</span>
         <span class="t ${st.tab === 'following' ? 'on' : ''}" data-tab="following">Подписки</span>
+        <span class="t ${st.tab === 'live' ? 'on' : ''}" data-tab="live">Эфиры</span>
       </div>
+      <button class="icon-btn feed-search" data-vsearch title="Поиск видео" ${opts.hideTabs ? 'hidden' : ''}>🔍</button>
       ${st.onBack ? `<button class="icon-btn" data-back style="left:10px;top:calc(6px + env(safe-area-inset-top));right:auto">←</button>` : ''}
     </div>`;
 
@@ -276,6 +330,9 @@ function createFeed(root, opts = {}) {
         <button class="act ${v.saved ? 'saved' : ''}" data-save title="Сохранить">
           <span class="ico">${v.saved ? '🔖' : '📑'}</span>
         </button>
+        <button class="act ${v.reposted ? 'reposted' : ''}" data-repost title="Репост">
+          <span class="ico">🔁</span><span class="n" data-reposts>${nfmt(v.reposts || 0)}</span>
+        </button>
         ${(App.me && !v.mine) ? `<button class="act" data-report title="Пожаловаться"><span class="ico">⚠️</span></button>` : ''}
         <div class="disc">🎵</div>
       </div>
@@ -317,9 +374,11 @@ function createFeed(root, opts = {}) {
     const v = st.items[i];
     const media = $('.media', p);
     let tapT = null;
+    let suppressClick = false;
 
     // клик по всему посту (оверлеи .shade/.paused перехватывают события — раньше пауза «не срабатывала»)
     p.addEventListener('click', e => {
+      if (suppressClick) { suppressClick = false; return; }
       if (e.target.closest('button, a, input, textarea, [data-openprof], .meta')) return;
       if (media.tagName !== 'VIDEO') return;
       if (tapT) { clearTimeout(tapT); tapT = null; doLike(true); return; }
@@ -421,6 +480,19 @@ function createFeed(root, opts = {}) {
       }, 'Удалить');
     });
 
+    const repostBtn = $('[data-repost]', p);
+    repostBtn && (repostBtn.onclick = e => {
+      e.stopPropagation();
+      if (!App.me) return navigate('#/auth');
+      repostBtn.disabled = true;
+      api(`/api/video/${v.id}/repost`, { method: 'POST', silent: true }).then(d => {
+        v.reposted = d.reposted; v.reposts = d.reposts;
+        repostBtn.classList.toggle('reposted', v.reposted);
+        $('[data-reposts]', repostBtn).textContent = nfmt(v.reposts);
+        toast(v.reposted ? 'Репост сделан' : 'Репост убран');
+      }).catch(() => { }).finally(() => { repostBtn.disabled = false; });
+    });
+
     const repBtn = $('[data-report]', p);
     repBtn && (repBtn.onclick = e => {
       e.stopPropagation();
@@ -428,6 +500,40 @@ function createFeed(root, opts = {}) {
     });
 
     if (media.tagName === 'VIDEO') {
+      /* долгое зажатие (400 мс) — ускоренное воспроизведение 2×, отпустил — обратно на 1× */
+      const badge = document.createElement('div');
+      badge.className = 'speed-badge';
+      badge.textContent = '2×';
+      badge.hidden = true;
+      p.appendChild(badge);
+      let lpTimer = null, longPressed = false;
+      const clearLp = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
+      const endLp = () => {
+        clearLp();
+        if (longPressed) {
+          longPressed = false;
+          media.playbackRate = 1;
+          badge.hidden = true;
+          suppressClick = true;
+          setTimeout(() => { suppressClick = false; }, 350);
+        }
+      };
+      p.addEventListener('pointerdown', e => {
+        if (e.target.closest('button, a, input, textarea, [data-openprof], .meta')) return;
+        if (media.paused) return;
+        longPressed = false; clearLp();
+        lpTimer = setTimeout(() => {
+          longPressed = true;
+          media.playbackRate = 2;
+          badge.hidden = false;
+          if (navigator.vibrate) { try { navigator.vibrate(25); } catch (e2) { } }
+        }, 400);
+      });
+      p.addEventListener('pointerup', endLp);
+      p.addEventListener('pointercancel', endLp);
+      p.addEventListener('pointerleave', endLp);
+      p.addEventListener('contextmenu', e => e.preventDefault());
+
       const bar = $('.prog i', p);
       media.addEventListener('timeupdate', () => {
         if (bar && media.duration) bar.style.width = ((media.currentTime / media.duration) * 100).toFixed(1) + '%';
@@ -435,6 +541,32 @@ function createFeed(root, opts = {}) {
       media.addEventListener('play', () => $('.paused', p).classList.remove('show'));
       media.addEventListener('pause', () => $('.paused', p).classList.add('show'));
     }
+
+    /* просмотр засчитываем только после 2 секунд:
+       для видео — реального проигрывания, для фото — нахождения на экране */
+    let viewedPost = false, viewTimer = null;
+    const markViewed = () => {
+      if (viewedPost) return;
+      viewedPost = true;
+      if (viewTimer) { clearTimeout(viewTimer); viewTimer = null; }
+      st.seen.add(v.id);
+      api(`/api/video/${v.id}/view`, { method: 'POST', silent: true }).then(() => {
+        v.views++;
+        const el = $('[data-views]', p);
+        if (el) { el.style.display = 'block'; el.textContent = '👁 ' + nfmt(v.views); }
+      }).catch(() => { });
+    };
+    const armView = () => {
+      if (viewedPost || viewTimer || media.tagName === 'VIDEO') return;
+      viewTimer = setTimeout(markViewed, 2000);
+    };
+    const disarmView = () => { if (viewTimer) { clearTimeout(viewTimer); viewTimer = null; } };
+    if (media.tagName === 'VIDEO') {
+      media.addEventListener('timeupdate', () => { if (media.currentTime >= 2) markViewed(); });
+      media.addEventListener('ended', markViewed);
+    }
+    p._armView = armView;
+    p._disarmView = disarmView;
   }
 
   function activate(p) {
@@ -442,6 +574,7 @@ function createFeed(root, opts = {}) {
     if (st.active) {
       const pv = $('.media', st.active);
       if (pv && pv.tagName === 'VIDEO') pv.pause();
+      if (st.active._disarmView) st.active._disarmView();
     }
     st.active = p;
     const id = +p.dataset.id;
@@ -457,14 +590,7 @@ function createFeed(root, opts = {}) {
       });
       $('.paused', p).classList.remove('show');
     }
-    if (v && !st.seen.has(id)) {
-      st.seen.add(id);
-      api(`/api/video/${id}/view`, { method: 'POST', silent: true }).then(() => {
-        v.views++;
-        const el = $('[data-views]', p);
-        if (el) { el.style.display = 'block'; el.textContent = '👁 ' + nfmt(v.views); }
-      }).catch(() => { });
-    }
+    if (p._armView) p._armView();
   }
 
   function setTab(t) {
@@ -474,6 +600,8 @@ function createFeed(root, opts = {}) {
   }
 
   $$('[data-tab]', root).forEach(el => el.onclick = () => setTab(el.dataset.tab));
+  const vsearchBtn = $('[data-vsearch]', root);
+  vsearchBtn && (vsearchBtn.onclick = () => { if (window.openVideoSearch) openVideoSearch(); });
   const backBtn = $('[data-back]', root);
   backBtn && (backBtn.onclick = () => { st.onBack ? st.onBack() : navigate('#/home'); });
 
@@ -621,12 +749,54 @@ views.home = async function (screen, r) {
   const host = document.createElement('div');
   host.style.cssText = 'position:absolute;inset:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom))';
   screen.appendChild(host);
+  if (tab === 'live') {
+    if (window.Live && Live.list) { Live.list(host, 'live'); return; }
+    await ensureView('live');
+    if (window.Live && Live.list) { Live.list(host, 'live'); return; }
+    host.innerHTML = '<div class="feed-empty">Не удалось загрузить раздел «Эфиры»</div>';
+    return;
+  }
   const d = await api(`/api/feed?scope=${tab}`);
   createFeed(host, {
     items: d.items, next: d.next, tab,
     more: () => true,
   });
 };
+/* ---------------- диплинк: видео по ссылке /#/video/123 ---------------- */
+views.video = async function (screen, r) {
+  if (!requireAuth()) return;
+  const id = +(r.args && r.args[0]) || 0;
+  screen.innerHTML = '<div class="loader"><div class="spin"></div></div>';
+  let v = null;
+  try { v = await api('/api/video/' + id, { silent: true }); } catch (e) { }
+  if (!v) { toast('Видео не найдено'); navigate('#/home'); return; }
+  const host = document.createElement('div');
+  host.className = 'overlay-feed';
+  host.style.cssText = 'position:absolute;inset:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom))';
+  screen.innerHTML = '';
+  screen.appendChild(host);
+  createFeed(host, {
+    items: [v], next: 0, tab: 'all', hideTabs: true,
+    onBack: () => { host.innerHTML = ''; navigate('#/home'); },
+  });
+};
+/* ---------------- лента результатов поиска (как в TikTok) ---------------- */
+views.sfeed = async function (screen, r) {
+  if (!requireAuth()) return;
+  const items = (App.searchFeed || []);
+  if (!items.length) { toast('Сначала найдите видео'); navigate('#/home'); return; }
+  const idx = Math.max(0, Math.min(items.length - 1, +((r && r.q && r.q.i) || 0)));
+  const rotated = items.slice(idx).concat(items.slice(0, idx));
+  screen.innerHTML = '';
+  const host = document.createElement('div');
+  host.style.cssText = 'position:absolute;inset:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom))';
+  screen.appendChild(host);
+  createFeed(host, {
+    items: rotated, next: 0, tab: 'all', hideTabs: true,
+    onBack: () => history.back(),
+  });
+};
+
 /* ---------------- views: plus / upload ---------------- */
 views.plus = async function (screen) {
   if (!requireAuth()) return;
@@ -663,6 +833,11 @@ views.plus = async function (screen) {
     </div>
 
     <div data-pane="live" hidden>
+      <button class="btn danger" data-golive style="width:100%">🔴 Начать прямой эфир</button>
+      <div class="inline-note" style="margin:10px 0 4px">
+        Живая трансляция с камеры со звуком: зрители смотрят и пишут в чат эфира.
+        Подписчики получат уведомление в «Активность». Лимит — 3 эфира одновременно.
+      </div>
       <div class="cam-wrap">
         <video data-cam autoplay playsinline muted></video>
       </div>
@@ -670,12 +845,12 @@ views.plus = async function (screen) {
       <div class="live-bar" data-livebar hidden><span class="rec-dot"></span><span data-timer>00:00</span> идёт эфир</div>
       <div style="height:12px"></div>
       <div class="row" style="gap:10px">
-        <button class="btn ghost" data-camstart>📷 Включить камеру</button>
+        <button class="btn ghost" data-camstart>📷 Записать с камеры</button>
         <button class="btn danger" data-camstop hidden>■ Остановить</button>
       </div>
       <div class="inline-note" style="margin-top:14px">
-        В первой версии «эфир» записывает видео с камеры в реальном времени — получится обычный живой ролик.
-        Настоящий стрим для зрителей добавим следующим этапом.
+        «Записать с камеры» делает обычный живой ролик, который потом публикуется в ленте.
+        Для настоящего эфира нажмите «Начать прямой эфир».
       </div>
     </div>
 
@@ -718,6 +893,10 @@ views.plus = async function (screen) {
     if (m === 'live') { previewBox.hidden = true; clearFile(); }
   }
   $$('[data-m]', screen).forEach(b => b.onclick = () => setMode(b.dataset.m));
+  $('[data-golive]', screen).onclick = () => {
+    if (window.startStreamFlow) startStreamFlow();
+    else navigate('#/home?tab=live');
+  };
 
   function clearFile() {
     file = null; thumbBlob = null; liveBlob = null;

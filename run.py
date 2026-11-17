@@ -12,6 +12,15 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+# .env рядом с run.py (в .gitignore) — локальные секреты, например POTATOS_ADMIN_PASSWORD
+env_path = os.path.join(ROOT, ".env")
+if os.path.isfile(env_path):
+    for line in open(env_path, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
 PKG = os.path.join(tempfile.gettempdir(), "potatos_pkg")
 INNER = os.path.join(PKG, "potatos")
 

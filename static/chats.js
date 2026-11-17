@@ -155,24 +155,57 @@ views.chats = async function (screen) {
     $('[data-listwrap]', screen).hidden = true;
     results.innerHTML = `<div class="loader"><div class="spin"></div></div>`;
     try {
-      const d = await api('/api/search?q=' + encodeURIComponent(term));
+      const [d, dv] = await Promise.all([
+        api('/api/search?q=' + encodeURIComponent(term)),
+        api('/api/search/videos?q=' + encodeURIComponent(term), { silent: true }).catch(() => ({ items: [] })),
+      ]);
       const users = d.users;
-      if (!users.length) {
-        results.innerHTML = `<div class="empty"><div class="ic">🔍</div><div>Никого не нашли<br><span class="muted">попробуйте другой запрос</span></div></div>`;
+      const vids = dv.items || [];
+      if (!users.length && !vids.length) {
+        results.innerHTML = `<div class="empty"><div class="ic">🔍</div><div>Ничего не найдено<br><span class="muted">попробуйте другое название видео или юзернейм</span></div></div>`;
         return;
       }
-      results.innerHTML = `
-        <div class="lbl" style="padding:14px 16px 4px;margin:0">Люди</div>
-        ${users.map(u => `<div class="list-item" data-user="${esc(u.username)}">
+      let html = '';
+      if (users.length) {
+        html += `<div class="lbl" style="padding:14px 16px 4px;margin:0">Люди</div>` +
+          users.map(u => `<div class="list-item" data-user="${esc(u.username)}">
             ${ava(u.avatar)}
             <div style="flex:1;min-width:0">
               <div style="font-weight:600">${esc(u.nickname)}</div>
               <div class="muted" style="font-size:13px">@${esc(u.username)}</div>
             </div>
-            <button class="btn sm ghost" data-open="${esc(u.username)}">Профиль</button>
-          </div>`).join('')}`;
+            <button class="btn sm ghost" data-open="${esc(u.username)}">Открыть</button>
+          </div>`).join('');
+      }
+      if (vids.length) {
+        const vthumb = v => v.thumb ? '/media/' + esc(v.thumb)
+          : (v.kind === 'photo' ? '/media/' + esc(v.media) : '');
+        html += `<div class="lbl" style="padding:14px 16px 4px;margin:0">Видео</div>` +
+          vids.map((v, i) => {
+            const img = vthumb(v);
+            const cap = (v.caption || 'Видео').slice(0, 60);
+            return `<div class="list-item" data-idx="${i}" data-vid="${v.id}">
+              ${img ? `<img class="sres-thumb" src="${img}" loading="lazy" alt="">` : '<div class="ava ava-ph">🎬</div>'}
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(cap)}</div>
+                <div class="muted" style="font-size:13px">@${esc((v.user && v.user.username) || '?')} · 👁 ${nfmt(v.views)}</div>
+              </div>
+              <button class="btn sm ghost" data-idx="${i}" data-watch>Смотреть</button>
+            </div>`;
+          }).join('');
+      }
+      results.innerHTML = html;
       $$('[data-user]', results).forEach(el => el.onclick = () => navigate('#/profile/' + el.dataset.user));
       $$('[data-open]', results).forEach(el => el.onclick = e => { e.stopPropagation(); navigate('#/profile/' + el.dataset.open); });
+      $$('[data-vid]', results).forEach(el => el.onclick = () => {
+        App.searchFeed = vids;
+        navigate('#/sfeed?i=' + el.dataset.idx);
+      });
+      $$('[data-watch]', results).forEach(el => el.onclick = e => {
+        e.stopPropagation();
+        App.searchFeed = vids;
+        navigate('#/sfeed?i=' + el.dataset.idx);
+      });
     } catch (e) { results.innerHTML = ''; }
   }, 320);
 
@@ -219,6 +252,13 @@ const ChatView = {
   }
 };
 
+/* ссылки в сообщениях кликабельны: http(s):// и внутренние /#/... */
+function linkify(escapedText) {
+  return String(escapedText)
+    .replace(/(https?:\/\/[^\s<>"']+)/g, '<a class="msg-link" href="$1" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|\s)(\/#\/[^\s<>"']+)/g, '$1<a class="msg-link" href="$2">$2</a>');
+}
+
 function msgHTML(m, prev) {
   const mine = App.me && m.user_id === App.me.id;
   const sameDay = prev && new Date(prev.created_at * 1000).toDateString() === new Date(m.created_at * 1000).toDateString();
@@ -226,7 +266,7 @@ function msgHTML(m, prev) {
   if (m.kind === 'sticker') inner = `<div class="sticker">${esc(m.text)}</div>`;
   else if (m.kind === 'photo') inner = `<img src="/media/${esc(m.media)}" loading="lazy" onclick="event.stopPropagation()">`;
   else if (m.kind === 'video') inner = `<video src="/media/${esc(m.media)}" controls playsinline preload="metadata"></video>`;
-  else inner = `<div class="tx">${esc(m.text)}</div>`;
+  else inner = `<div class="tx">${linkify(esc(m.text))}</div>`;
 
   const showWho = !mine && m.author && m.author.username
     && (m.kind === 'activity' || (prev && prev.user_id !== m.user_id));

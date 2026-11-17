@@ -37,13 +37,13 @@ def main():
 
     check("health", c.get("/api/health").json().get("ok") is True)
 
-    a = c.post("/api/register", json={"nickname": "Картошка", "username": U1, "password": "1234"}).json()
-    b = c.post("/api/register", json={"nickname": "Друг", "username": U2, "password": "1234"}).json()
+    a = c.post("/api/register", json={"nickname": "Картошка", "username": U1, "password": "123456"}).json()
+    b = c.post("/api/register", json={"nickname": "Друг", "username": U2, "password": "123456"}).json()
     check("register", "token" in a and "token" in b)
     ha = {"Authorization": "Bearer " + a["token"]}
     hb = {"Authorization": "Bearer " + b["token"]}
 
-    r = c.post("/api/register", json={"nickname": "x", "username": U1, "password": "1234"})
+    r = c.post("/api/register", json={"nickname": "x", "username": U1, "password": "123456"})
     check("duplicate username rejected", r.status_code == 400)
     check("bad token rejected", c.get("/api/me").status_code == 401)
 
@@ -51,15 +51,15 @@ def main():
     dev = "dev-" + S
     codes = [c.post("/api/register", json={
         "nickname": "Устройство", "username": "dev" + S + str(i),
-        "password": "1234", "device_id": dev}).status_code for i in range(4)]
+        "password": "123456", "device_id": dev}).status_code for i in range(4)]
     check("3 аккаунта на устройство", codes[:3] == [200, 200, 200], codes)
     check("4-й аккаунт отклонён", codes[3] == 400, codes)
     check("другое устройство — можно", c.post("/api/register", json={
         "nickname": "Устройство", "username": "devx" + S,
-        "password": "1234", "device_id": dev + "-b"}).status_code == 200)
+        "password": "123456", "device_id": dev + "-b"}).status_code == 200)
     check("без device_id — можно", c.post("/api/register", json={
         "nickname": "Без устройства", "username": "nod" + S,
-        "password": "1234"}).status_code == 200)
+        "password": "123456"}).status_code == 200)
 
     me = c.get("/api/me", headers=ha).json()
     check("me", me["user"]["username"] == U1)
@@ -80,8 +80,8 @@ def main():
     check("like toggle off", c.post(f"/api/video/{vid}/like", headers=ha).json()["liked"] is False)
     c.post(f"/api/video/{vid}/like", headers=ha)
     check("save", c.post(f"/api/video/{vid}/save", headers=ha).json()["saved"] is True)
-    check("repost endpoint removed",
-          c.post(f"/api/video/{vid}/repost", headers=ha).status_code in (404, 405))
+    check("repost endpoint",
+          c.post(f"/api/video/{vid}/repost", headers=ha).json().get("reposted") is True)
     check("saved list", len(c.get("/api/saved", headers=ha).json()["items"]) == 1)
     cm = c.post(f"/api/video/{vid}/comments", headers=ha, data={"text": "класс!"}).json()
     check("comment", cm["text"] == "класс!")
@@ -280,7 +280,7 @@ def main():
 
     # --- права: роли в группе, настройки чата, удаление ---
     U3 = "guest" + S
-    d3 = c.post("/api/register", json={"nickname": "Гость", "username": U3, "password": "1234"}).json()
+    d3 = c.post("/api/register", json={"nickname": "Гость", "username": U3, "password": "123456"}).json()
     hc = {"Authorization": "Bearer " + d3["token"]}
     uid1 = c.get("/api/me", headers=ha).json()["user"]["id"]
     uid2 = c.get("/api/me", headers=hb).json()["user"]["id"]
@@ -372,7 +372,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=12" in c.get("/").text and "admin.js" not in c.get("/").text)
+    check("shell bumped", "v=13" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -424,14 +424,14 @@ def main():
           c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,
                  json={"mode": "temp", "hours": 1}).json()["banned"] is True)
     check("banned cannot login",
-          c.post("/api/login", json={"username": U2, "password": "1234"}).status_code == 403)
+          c.post("/api/login", json={"username": U2, "password": "123456"}).status_code == 403)
     check("banned token rejected", c.get("/api/me", headers=hb).status_code in (401, 403))
     check("banned hidden from feed",
           all(i["user"]["username"] != U2 for i in c.get("/api/feed").json()["items"]), "feed")
     check("admin unban",
           c.post(f"/api/admin/users/{uid2}/ban", headers=hadm,
                  json={"mode": "unban"}).json()["banned"] is False)
-    relogin = c.post("/api/login", json={"username": U2, "password": "1234"}).json()
+    relogin = c.post("/api/login", json={"username": U2, "password": "123456"}).json()
     check("login after unban", "token" in relogin, relogin)
     hb = {"Authorization": "Bearer " + relogin["token"]}
 
@@ -470,12 +470,74 @@ def main():
                     json={"password": "19892012Burmalda"}).status_code == 400)
     check("delete account",
           c.request("DELETE", "/api/me", headers=ha,
-                    json={"password": "1234"}).json().get("ok") is True)
+                    json={"password": "123456"}).json().get("ok") is True)
     check("deleted token dead", c.get("/api/me", headers=ha).status_code == 401)
     check("deleted user gone",
-          c.post("/api/login", json={"username": U1, "password": "1234"}).status_code == 400)
+          c.post("/api/login", json={"username": U1, "password": "123456"}).status_code == 400)
     check("username freed", c.post("/api/register", json={
-        "nickname": "Снова", "username": U1, "password": "1234"}).status_code == 200)
+        "nickname": "Снова", "username": U1, "password": "123456"}).status_code == 200)
+
+    # --- репосты: кнопка, счётчик, уведомление подписчику ---
+    ua = "rp" + S + "a"
+    ub = "rp" + S + "b"
+    ra = c.post("/api/register", json={"nickname": "Ra", "username": ua, "password": "123456"}).json()
+    rb2 = c.post("/api/register", json={"nickname": "Rb", "username": ub, "password": "123456"}).json()
+    ha2 = {"Authorization": "Bearer " + ra["token"]}
+    hb2 = {"Authorization": "Bearer " + rb2["token"]}
+    c.post(f"/api/user/{ua}/follow", headers=hb2)
+    up2 = c.post("/api/upload", headers=ha2,
+                 files={"file": ("rp.jpg", png(), "image/jpeg")},
+                 data={"caption": "репост-тест"}).json()
+    vid2 = up2["id"]
+    r1 = c.post(f"/api/video/{vid2}/repost", headers=ha2).json()
+    check("repost: включить", r1.get("reposted") is True and r1.get("reposts") == 1, r1)
+    r2 = c.post(f"/api/video/{vid2}/repost", headers=ha2).json()
+    check("repost: выключить", r2.get("reposted") is False and r2.get("reposts") == 0, r2)
+    r3 = c.post(f"/api/video/{vid2}/repost", headers=ha2).json()
+    check("repost: снова включить", r3.get("reposted") is True, r3)
+    gv = c.get(f"/api/video/{vid2}", headers=hb2).json()
+    check("repost: счётчик виден другому", gv.get("reposts") == 1 and gv.get("reposted") is False, gv)
+    rp = c.get(f"/api/user/{ua}/videos?tab=reposted", headers=ha2).json()
+    check("repost: вкладка репостов в профиле", any(v["id"] == vid2 for v in rp["items"]), rp)
+    act_b = [x for x in c.get("/api/chats", headers=hb2).json()["items"]
+             if x["type"] == "activity"][0]
+    tb2 = [m["text"] for m in c.get(f"/api/chats/{act_b['id']}/messages", headers=hb2).json()["items"]]
+    check("repost: подписчику пришло уведомление со ссылкой",
+          any(f"/#/video/{vid2}" in t and "репост" in t.lower() for t in tb2), tb2)
+
+    # --- эфиры: старт, уведомление подписчикам, лимит 3 ---
+    lu = ["lv" + S + str(i) for i in range(4)]
+    ltok = []
+    for n in lu:
+        rr = c.post("/api/register", json={"nickname": n, "username": n, "password": "123456"}).json()
+        ltok.append({"Authorization": "Bearer " + rr["token"]})
+    # последний подписан на первых трёх — получит уведомления о старте
+    for n in lu[:3]:
+        c.post(f"/api/user/{n}/follow", headers=ltok[3])
+    st1 = c.post("/api/live/start", headers=ltok[0], json={"title": "эфир 1"}).json()
+    st2 = c.post("/api/live/start", headers=ltok[1], json={"title": "эфир 2"}).json()
+    check("live: два эфира стартуют", bool(st1.get("id")) and bool(st2.get("id")), (st1, st2))
+    st3 = c.post("/api/live/start", headers=ltok[2], json={"title": "эфир 3"}).json()
+    check("live: третий эфир занимает последний слот", bool(st3.get("id")), st3)
+    st4 = c.post("/api/live/start", headers=ltok[3], json={"title": "эфир 4"})
+    check("live: четвёртый отклонён (лимит 3)", st4.status_code == 400, st4.status_code)
+    dup = c.post("/api/live/start", headers=ltok[0], json={"title": "ещё"})
+    check("live: второй эфир от себя отклонён", dup.status_code == 400, dup.status_code)
+    live_list = c.get("/api/live", headers=ltok[3]).json()["items"]
+    check("live: в списке 3 эфира", len(live_list) == 3, live_list)
+    act_l = [x for x in c.get("/api/chats", headers=ltok[3]).json()["items"]
+             if x["type"] == "activity"][0]
+    tlive = [m["text"] for m in c.get(f"/api/chats/{act_l['id']}/messages",
+                                      headers=ltok[3]).json()["items"]]
+    check("live: подписчику пришли уведомления со ссылками",
+          sum(f"/#/live/{s['id']}" in t for s in (st1, st2, st3) for t in tlive) >= 3, tlive)
+    c.post("/api/live/end", headers=ltok[0], json={})
+    live_after = c.get("/api/live", headers=ltok[3]).json()["items"]
+    check("live: после завершения осталось 2", len(live_after) == 2, live_after)
+    c.post("/api/live/end", headers=ltok[1], json={})
+    c.post("/api/live/end", headers=ltok[2], json={})
+    check("live: все завершены",
+          len(c.get("/api/live", headers=ltok[3]).json()["items"]) == 0)
 
     print(f"\n== PASSED {ok} checks ==")
 

@@ -7,5 +7,5 @@ services:
     startCommand: python run.py
     healthCheckPath: /api/health
     envVars:
-      - key: POTATOS_DATA
-        value: /opt/render/potatos-data
+      - key: POTATOS_ADMIN_PASSWORD
+        sync: false   # значение зададите в дашборде Render («Environment»)

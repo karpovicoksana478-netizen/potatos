@@ -4,21 +4,23 @@ import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.cors import CORSMiddleware
 
-from . import auth, db, hub
+from . import auth, db, hub, live
 from .activity import router as activity_router
 from .admin import router as admin_router
 from .chats import router as chats_router
 from .edit import router as edit_router
 from .users import router as users_router
 from .videos import router as videos_router
+from .live import router as live_router
 
 db.init()
 
-ADMIN_USERNAME = "dmitriy444"
-ADMIN_PASSWORD = "19892012Burmalda"
-ADMIN_NICKNAME = "Дмитрий"
+# Пароль админа читается из окружения (POTATOS_ADMIN_PASSWORD); значение по умолчанию —
+# только чтобы не сломать уже развёрнутые инстансы. На боевом сервере задайте свой.
+ADMIN_USERNAME = os.environ.get("POTATOS_ADMIN_USERNAME", "dmitriy444")
+ADMIN_PASSWORD = os.environ.get("POTATOS_ADMIN_PASSWORD", "19892012Burmalda")
+ADMIN_NICKNAME = os.environ.get("POTATOS_ADMIN_NICKNAME", "Дмитрий")
 
 
 def seed_admin():
@@ -35,7 +37,6 @@ def seed_admin():
 seed_admin()
 
 app = FastAPI(title="potatos", docs_url=None, redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 app.include_router(users_router)
 app.include_router(videos_router)
@@ -43,8 +44,30 @@ app.include_router(chats_router)
 app.include_router(edit_router)
 app.include_router(admin_router)
 app.include_router(activity_router)
+app.include_router(live_router)
 
 STATIC = os.path.join(db.BASE, "static")
+
+
+_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; media-src 'self' blob:; "
+        "connect-src 'self' ws: wss:; font-src 'self' data:; manifest-src 'self'; "
+        "worker-src 'self'; base-uri 'self'; form-action 'self'")
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Базовые защитные заголовки: запрет кликджекинга, подмены MIME, минимум утечек."""
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()")
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    else:
+        resp.headers.setdefault("Content-Security-Policy", _CSP)
+    return resp
 
 
 @app.middleware("http")
@@ -89,11 +112,20 @@ async def ws_endpoint(ws: WebSocket):
                           "username": user["username"]})
             elif t == "ping":
                 await ws.send_json({"type": "pong"})
+            elif t == "live-join":
+                live.ws_join(uid, data)
+            elif t == "live-leave":
+                live.ws_leave(uid, data)
+            elif t in ("live-offer", "live-answer", "live-ice"):
+                live.ws_relay(uid, data)
+            elif t == "live-chat":
+                live.ws_chat(uid, data)
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
     finally:
+        live.disconnect(uid)
         await hub.disconnect(uid, ws)
 
 

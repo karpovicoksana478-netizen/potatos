@@ -44,6 +44,10 @@ def stats(admin=Depends(admin_user)):
                          (int(time.time()) - 90,))["c"],
         "banned": db.one("SELECT COUNT(*) c FROM users WHERE banned_until=-1 OR banned_until > ?",
                          (int(time.time()),))["c"],
+        "reports_open": db.one(
+            "SELECT COUNT(*) c FROM reports WHERE status='open'")["c"],
+        "streams": db.one(
+            "SELECT COUNT(*) c FROM live_streams WHERE ended_at IS NULL")["c"],
     }
 
 

@@ -35,13 +35,16 @@ def video_payloads(items, me=None) -> list:
 
     likes = counts("likes")
     comments = counts("comments")
-    mine, saved, follows = set(), set(), set()
+    reposts = counts("reposts")
+    mine, saved, follows, reposted = set(), set(), set(), set()
     if me:
         mid = me["id"]
         mine = {r["video_id"] for r in db.rows(
             f"SELECT video_id FROM likes WHERE user_id=? AND video_id IN ({ph})", (mid, *ids))}
         saved = {r["video_id"] for r in db.rows(
             f"SELECT video_id FROM saves WHERE user_id=? AND video_id IN ({ph})", (mid, *ids))}
+        reposted = {r["video_id"] for r in db.rows(
+            f"SELECT video_id FROM reposts WHERE user_id=? AND video_id IN ({ph})", (mid, *ids))}
         follows = {r["followee_id"] for r in db.rows(
             f"SELECT followee_id FROM follows WHERE follower_id=? AND followee_id IN ({uph})",
             (mid, *tuple(uids)))}
@@ -53,8 +56,10 @@ def video_payloads(items, me=None) -> list:
             "user": auth.public_user(u) if u else None,
             "likes": likes.get(v["id"], 0),
             "comments_count": comments.get(v["id"], 0),
+            "reposts": reposts.get(v["id"], 0),
             "liked": v["id"] in mine,
             "saved": v["id"] in saved,
+            "reposted": v["id"] in reposted,
             "followed": v["user_id"] in follows,
             "mine": bool(me and v["user_id"] == me["id"]),
         })
@@ -167,6 +172,38 @@ def feed(cursor: int = 0, limit: int = 12, scope: str = "all", user=Depends(auth
     return {"items": out, "next": next_cursor}
 
 
+@router.get("/video/{vid}")
+def get_video(vid: int, user=Depends(auth.guest_or_user)):
+    v = db.one("SELECT * FROM videos WHERE id=?", (vid,))
+    if not v:
+        raise HTTPException(404, "Видео не найдено")
+    return video_payload(v, user)
+
+
+@router.post("/video/{vid}/repost")
+def repost(vid: int, user=Depends(auth.current_user)):
+    v = db.one("SELECT * FROM videos WHERE id=?", (vid,))
+    if not v:
+        raise HTTPException(404, "Видео не найдено")
+    ex = db.one("SELECT 1 x FROM reposts WHERE user_id=? AND video_id=?", (user["id"], vid))
+    if ex:
+        db.run("DELETE FROM reposts WHERE user_id=? AND video_id=?", (user["id"], vid))
+        reposted = False
+    else:
+        db.run("INSERT OR IGNORE INTO reposts (user_id, video_id, created_at) VALUES (?,?,?)",
+               (user["id"], vid, db.now()))
+        reposted = True
+        # подписчикам — в «Активность» со ссылкой на видео
+        snippet = (v["caption"] or "видео").strip()[:120]
+        followers = [r["follower_id"] for r in db.rows(
+            "SELECT follower_id FROM follows WHERE followee_id=?", (user["id"],))]
+        for fid in followers:
+            activity.add(fid, "repost", actor=user, post_id=vid,
+                         text=f"{snippet} · /#/video/{vid}")
+    count = db.one("SELECT COUNT(*) c FROM reposts WHERE video_id=?", (vid,))["c"]
+    return {"reposted": reposted, "reposts": count}
+
+
 @router.post("/video/{vid}/view")
 def view(vid: int, user=Depends(auth.guest_or_user)):
     db.run("UPDATE videos SET views = views + 1 WHERE id=?", (vid,))
@@ -202,6 +239,48 @@ def save(vid: int, user=Depends(auth.current_user)):
         db.run("INSERT INTO saves (user_id, video_id, created_at) VALUES (?,?,?)", (user["id"], vid, db.now()))
         saved = True
     return {"saved": saved}
+
+
+@router.get("/search/videos")
+def search_videos(q: str = "", limit: int = 20, user=Depends(auth.guest_or_user)):
+    """Поиск видео по названию: ранжируем по лучшему совпадению.
+
+    Очки: точное вхождение подстроки > совпавшие слова > похожесть (difflib).
+    """
+    import difflib
+    q = (q or "").strip()
+    if not q:
+        return {"items": []}
+    limit = max(1, min(limit, 40))
+    ql = q.lower()
+    qwords = ql.split()
+    now = db.now()
+    cand = db.rows(
+        "SELECT v.* FROM videos v JOIN users bu ON bu.id=v.user_id "
+        "WHERE NOT (bu.banned_until=-1 OR bu.banned_until > ?) "
+        "ORDER BY v.id DESC LIMIT 500", (now,))
+
+    def score(v):
+        cap = (v["caption"] or "").lower()
+        if not cap:
+            return 0.0
+        s = 0.0
+        if ql in cap:
+            s += 100.0
+        words = cap.split()
+        matched = sum(1 for w in qwords for cw in words if w in cw)
+        s += 30.0 * matched
+        s += difflib.SequenceMatcher(None, ql, cap[:200]).ratio() * 15.0
+        if words:
+            best = max(difflib.SequenceMatcher(None, ql, w).ratio() for w in words)
+            s += best * 45.0
+        return s
+
+    scored = [(score(v), v) for v in cand]
+    matched = [t for t in scored if t[0] >= 12.0]
+    matched.sort(key=lambda t: t[0], reverse=True)
+    top = [v for _, v in matched[:limit]]
+    return {"items": video_payloads(top, user)}
 
 
 @router.get("/video/{vid}/comments")
@@ -309,6 +388,9 @@ def _user_videos(user_row: dict, me, table: str):
     if table == "liked":
         items = db.rows("SELECT v.* FROM likes l JOIN videos v ON v.id=l.video_id "
                         "WHERE l.user_id=? ORDER BY l.created_at DESC", (user_row["id"],))
+    elif table == "reposted":
+        items = db.rows("SELECT v.* FROM reposts r JOIN videos v ON v.id=r.video_id "
+                        "WHERE r.user_id=? ORDER BY r.created_at DESC", (user_row["id"],))
     else:
         items = db.rows("SELECT * FROM videos WHERE user_id=? ORDER BY id DESC", (user_row["id"],))
     return video_payloads(items, me)
@@ -319,7 +401,7 @@ def user_videos(username: str, tab: str = "videos", user=Depends(auth.guest_or_u
     u = db.one("SELECT * FROM users WHERE username=?", (username,))
     if not u:
         raise HTTPException(404, "Пользователь не найден")
-    if tab not in ("videos", "liked"):
+    if tab not in ("videos", "liked", "reposted"):
         tab = "videos"
     if tab == "liked" and (not user or user["id"] != u["id"]):
         raise HTTPException(403, "Лайки скрыты")

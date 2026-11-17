@@ -144,6 +144,13 @@ CREATE TABLE IF NOT EXISTS push_subs (
   auth TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS live_streams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  ended_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -158,6 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_videos_user ON videos(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_video ON comments(video_id, id);
 CREATE INDEX IF NOT EXISTS idx_chats_activity ON chats(type, owner_id);
+CREATE INDEX IF NOT EXISTS idx_live_active ON live_streams(ended_at);
 """
 
 

@@ -1,13 +1,14 @@
 import os
 import re
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
-from . import activity, auth, db
+from . import activity, auth, db, ratelimit
 
 router = APIRouter(prefix="/api")
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.]{3,24}$")
+MIN_PASSWORD = 6
 
 
 def stats(u: dict, me) -> dict:
@@ -29,18 +30,25 @@ def stats(u: dict, me) -> dict:
     return out
 
 
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?")
+    return ip[:64] or "?"
+
+
 @router.post("/register")
-def register(body: dict):
+def register(body: dict, request: Request):
     nickname = (body.get("nickname") or "").strip()
     username = (body.get("username") or "").strip().lstrip("@")
     password = body.get("password") or ""
     device_id = (body.get("device_id") or "").strip()[:64]
+    ratelimit.check("register", _client_ip(request), 30, 3600)
     if not nickname or len(nickname) > 32:
         raise HTTPException(400, "Введите ник (до 32 символов)")
     if not USERNAME_RE.match(username):
         raise HTTPException(400, "Юзернейм: 3-24 символа, латиница, цифры, _ и .")
-    if len(password) < 4:
-        raise HTTPException(400, "Пароль от 4 символов")
+    if len(password) < MIN_PASSWORD:
+        raise HTTPException(400, f"Пароль от {MIN_PASSWORD} символов")
     if db.one("SELECT 1 x FROM users WHERE username=?", (username,)):
         raise HTTPException(400, "Такой юзернейм занят")
     # одно устройство — максимум три аккаунта
@@ -59,9 +67,10 @@ def register(body: dict):
 
 
 @router.post("/login")
-def login(body: dict):
+def login(body: dict, request: Request):
     username = (body.get("username") or "").strip().lstrip("@")
     password = body.get("password") or ""
+    ratelimit.check("login", f"{_client_ip(request)}:{username.lower()}", 8, 300)
     u = db.one("SELECT * FROM users WHERE username=?", (username,))
     if not u or not auth.verify_password(password, u["password"]):
         raise HTTPException(400, "Неверный юзернейм или пароль")
@@ -96,6 +105,22 @@ def edit_me(body: dict, user=Depends(auth.current_user)):
     db.run("UPDATE users SET nickname=?, bio=? WHERE id=?", (nickname, bio, user["id"]))
     u = db.one("SELECT * FROM users WHERE id=?", (user["id"],))
     return {"user": auth.public_user(u)}
+
+
+@router.post("/me/password")
+def change_password(body: dict, user=Depends(auth.current_user)):
+    """Смена пароля: текущий проверяется, после смены все сессии отзываются."""
+    old = (body.get("old_password") or "")
+    new = (body.get("new_password") or "")
+    if not auth.verify_password(old, user["password"]):
+        raise HTTPException(400, "Неверный текущий пароль")
+    if len(new) < MIN_PASSWORD:
+        raise HTTPException(400, f"Новый пароль от {MIN_PASSWORD} символов")
+    if new == old:
+        raise HTTPException(400, "Новый пароль совпадает с текущим")
+    db.run("UPDATE users SET password=? WHERE id=?", (auth.hash_password(new), user["id"]))
+    db.run("DELETE FROM tokens WHERE user_id=?", (user["id"],))
+    return {"ok": True}
 
 
 @router.post("/me/avatar")

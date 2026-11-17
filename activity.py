@@ -17,7 +17,7 @@ from . import auth, db, hub
 router = APIRouter(prefix="/api")
 
 TITLE = "Активность"
-DESCRIPTION = "Лайки, подписки, комментарии и упоминания"
+DESCRIPTION = "Лайки, подписки, репосты, комментарии, эфиры и упоминания"
 MENTION_RE = re.compile(r"(?:^|\s)@([a-zA-Z0-9_.]{3,24})")
 DUP_WINDOW = 120  # сек: одно и то же действие не дублируем
 
@@ -47,6 +47,10 @@ def _text(kind: str, detail: str) -> str:
         return f"↩️ ответил вам: «{t}»" if t else "↩️ ответил вам"
     if kind == "mention":
         return f"🔔 упомянул вас: «{t}»" if t else "🔔 упомянул вас"
+    if kind == "repost":
+        return f"🔁 репостнул: «{t}»" if t else "🔁 репостнул ваш пост"
+    if kind == "live":
+        return f"🔴 начал прямой эфир: «{t}»" if t else "🔴 начал прямой эфир"
     return t or "активность"
 
 

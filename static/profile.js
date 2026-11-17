@@ -56,7 +56,8 @@ views.profile = async function (screen, r) {
     const grid = $('[data-grid]', screen);
     if (grid) {
       grid.innerHTML = videoGrid(items, tab === 'saved' ? 'Нет сохранённых видео'
-        : tab === 'liked' ? 'Пока нет лайков' : 'Пока нет видео');
+        : tab === 'liked' ? 'Пока нет лайков'
+          : tab === 'reposted' ? 'Пока нет репостов' : 'Пока нет видео');
       $$('.gcell', grid).forEach(c => c.onclick = () => openFeedOverlay(items, +c.dataset.i));
     }
   }
@@ -89,7 +90,7 @@ views.profile = async function (screen, r) {
     <div data-circles></div>
     <div class="ptabs">
       <button class="on" data-t="videos">Видео</button>
-      ${isMe ? `<button data-t="saved">Сохранённые</button><button data-t="liked">Лайки</button>` : ''}
+      ${isMe ? `<button data-t="saved">Сохранённые</button><button data-t="liked">Лайки</button>` : ''}<button data-t="reposted">Репосты</button>
     </div>
     <div data-grid><div class="loader"><div class="spin"></div></div></div>
     <div style="height:40px"></div>`;
@@ -259,6 +260,8 @@ views.settings = async function (screen) {
       <label class="lbl" style="margin-top:0">Аккаунт</label>
       <button class="btn ghost" data-edit>✏️ Редактировать профиль</button>
       <div style="height:10px"></div>
+      <button class="btn ghost" data-chpw>🔑 Сменить пароль</button>
+      <div style="height:10px"></div>
       <button class="btn ghost" data-logout>Выйти из аккаунта</button>
 
       <div class="divider"></div>
@@ -270,7 +273,7 @@ views.settings = async function (screen) {
       ${App.me.is_admin ? `
       <div class="divider"></div>
       <label class="lbl" style="margin-top:0">Модерация</label>
-      <button class="btn ghost" data-reports>⚠️ Жалобы<span data-repcount></span></button>` : ''}
+      <button class="btn ghost" data-adminpanel>🛠 Админ-панель<span data-repcount></span></button>` : ''}
 
       <div class="divider"></div>
       <div class="inline-note">
@@ -290,6 +293,27 @@ views.settings = async function (screen) {
   });
 
   $('[data-edit]', screen).onclick = () => navigate('#/edit');
+  $('[data-chpw]', screen).onclick = () => {
+    const m = sheet('🔑 Сменить пароль', `
+      <label class="lbl" style="margin-top:0">Текущий пароль</label>
+      <input class="field" data-old type="password" autocomplete="current-password" placeholder="••••••••">
+      <label class="lbl">Новый пароль (от 6 символов)</label>
+      <input class="field" data-new type="password" autocomplete="new-password" placeholder="••••••••">
+      <div style="height:16px"></div>
+      <button class="btn" data-save>Сменить пароль</button>
+      <div class="inline-note" style="margin-top:12px">После смены пароля все сессии на других устройствах будут завершены.</div>`);
+    $('[data-save]', m).onclick = async () => {
+      const oldPw = $('[data-old]', m).value, newPw = $('[data-new]', m).value;
+      if (!oldPw || newPw.length < 6) { toast('Новый пароль от 6 символов'); return; }
+      try {
+        await api('/api/me/password', { method: 'POST', body: { old_password: oldPw, new_password: newPw } });
+        Overlay.close();
+        logoutLocal();
+        toast('Пароль изменён — войдите заново');
+        navigate('#/auth');
+      } catch (e) { }
+    };
+  };
   $('[data-logout]', screen).onclick = () => {
     confirmModal('Выйти из аккаунта?', async () => {
       try { await api('/api/logout', { method: 'POST', silent: true }); } catch (e) { }
@@ -385,68 +409,15 @@ views.settings = async function (screen) {
     $('[data-pw]', m).onkeydown = e => { if (e.key === 'Enter') kill(); };
   };
 
-  /* очередь жалоб (только админ) */
-  const rb = $('[data-reports]', screen);
+  /* админ-панель (только админ): статистика + жалобы со ссылками */
+  const rb = $('[data-adminpanel]', screen);
   if (rb) {
-    rb.onclick = () => openReports();
-    api('/api/admin/reports', { silent: true })
-      .then(d => { const el = $('[data-repcount]', screen); if (el && d.open) el.textContent = ` (${d.open})`; })
+    rb.onclick = () => navigate('#/admin');
+    api('/api/admin/stats', { silent: true })
+      .then(d => { const el = $('[data-repcount]', screen); if (el && d.reports_open) el.textContent = ` (${d.reports_open})`; })
       .catch(() => { });
   }
 };
-
-/* ---------------- очередь жалоб администратора ---------------- */
-async function openReports() {
-  const m = sheet('⚠️ Жалобы', '<div class="loader"><div class="spin"></div></div>');
-  const body = $('.sh-body', m);
-  const paint = async () => {
-    let d;
-    try { d = await api('/api/admin/reports'); } catch (e) {
-      body.innerHTML = '<div class="inline-note">Не удалось загрузить жалобы</div>';
-      return;
-    }
-    if (!d.items.length) {
-      body.innerHTML = '<div class="inline-note">Жалоб нет — всё чисто 🎉</div>';
-      return;
-    }
-    body.innerHTML = d.items.map(r => {
-      const t = r.target || {};
-      const what = r.kind === 'post' ? 'Пост' : 'Комментарий';
-      const snippet = (t.caption || t.text || '').slice(0, 110) || (r.kind === 'post' ? '[медиа]' : '');
-      const done = r.status !== 'open';
-      return `<div class="rep-row" data-id="${r.id}">
-        <div class="rep-h"><b>${what}</b> · @${esc(t.owner || '?')} · ${timeAgo(r.created_at)}</div>
-        <div class="rep-x">${esc(snippet)}</div>
-        <div class="rep-m">причина: ${esc(r.reason || '—')} · от @${esc(r.reporter || '?')}</div>
-        ${done ? '<div class="rep-m">✅ Рассмотрено</div>' : `
-        <div class="row" style="gap:8px;margin-top:8px">
-          <button class="btn sm danger" data-del>🗑 Удалить</button>
-          <button class="btn sm ghost" data-close>Закрыть</button>
-        </div>`}
-      </div>`;
-    }).join('');
-    $$('.rep-row', body).forEach(row => {
-      const id = +row.dataset.id;
-      const del = $('[data-del]', row);
-      const close = $('[data-close]', row);
-      del && (del.onclick = () => confirmModal('Удалить этот контент?', async () => {
-        try {
-          await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'delete' } });
-          toast('Контент удалён');
-          paint();
-        } catch (e) { }
-      }, 'Удалить'));
-      close && (close.onclick = async () => {
-        try {
-          await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'close' } });
-          toast('Жалоба закрыта');
-          paint();
-        } catch (e) { }
-      });
-    });
-  };
-  await paint();
-}
 
 /* ---------------- меню администратора в профиле ---------------- */
 function fmtTime(ts) {
