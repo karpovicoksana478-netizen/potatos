@@ -59,7 +59,7 @@ def _payload(m: dict, actor: dict) -> dict:
         "id": m["id"], "chat_id": m["chat_id"], "user_id": m["user_id"], "kind": m["kind"],
         "text": m["text"], "media": m["media"], "created_at": m["created_at"],
         "author": {"username": actor.get("username"), "nickname": actor.get("nickname"),
-                   "avatar": actor.get("avatar")},
+                   "avatar": actor.get("avatar"), "verified": bool(actor.get("verified") or 0)},
     }
 
 
@@ -81,7 +81,7 @@ def add(user_id, kind, actor=None, post_id=None, text=""):
     actor_id = actor["id"] if isinstance(actor, dict) else actor
     if not actor_id or actor_id == user_id:
         return None
-    a = db.one("SELECT id, username, nickname, avatar FROM users WHERE id=?", (actor_id,))
+    a = db.one("SELECT id, username, nickname, avatar, verified FROM users WHERE id=?", (actor_id,))
     if not a:
         return None
     msg_text = _text(kind, text)

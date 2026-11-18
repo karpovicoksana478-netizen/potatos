@@ -6,6 +6,7 @@
 лимит зрителей на эфир и не более 3 эфиров одновременно.
 """
 import threading
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -17,9 +18,14 @@ MAX_STREAMS = 3
 MAX_VIEWERS = 40
 TITLE_MAX = 80
 CHAT_MAX = 300
+LIKE_MIN_INTERVAL = 0.12   # секунд между лайками от одного зрителя
+LIKE_PUSH_INTERVAL = 0.25  # секунд между WS-рассылками счётчика
 
 _lock = threading.Lock()
 ROOMS: dict = {}   # sid -> {"broadcaster": int, "members": set[int]}
+_last_like: dict = {}
+_last_push: dict = {}
+_throttle_lock = threading.Lock()
 
 
 # ---------- комнаты ----------
@@ -40,6 +46,10 @@ def end_stream(sid: int):
         members = list(room["members"]) if room else []
     db.run("UPDATE live_streams SET ended_at=? WHERE id=? AND ended_at IS NULL",
            (db.now(), sid))
+    with _throttle_lock:
+        for k in [k for k in _last_like if k[0] == sid]:
+            _last_like.pop(k, None)
+        _last_push.pop(sid, None)
     if members:
         hub.push(members, {"type": "live-end", "sid": sid})
 
@@ -49,13 +59,26 @@ def _stream_payload(l: dict) -> dict:
     with _lock:
         room = ROOMS.get(l["id"])
         viewers = _viewers(room) if room else 0
+    likes = db.one("SELECT COUNT(*) c FROM live_likes WHERE stream_id=?", (l["id"],))["c"]
     return {
         "id": l["id"],
         "title": l["title"],
         "created_at": l["created_at"],
         "viewers": viewers,
+        "likes": likes,
         "user": auth.public_user(u) if u else None,
     }
+
+
+def _push_likes(sid: int, likes: int):
+    with _throttle_lock:
+        now = time.time()
+        if now - _last_push.get(sid, 0) < LIKE_PUSH_INTERVAL:
+            return
+        _last_push[sid] = now
+    room = ROOMS.get(sid)
+    if room:
+        hub.push(list(room["members"]), {"type": "live-like", "sid": sid, "likes": likes})
 
 
 # ---------- REST ----------
@@ -82,6 +105,24 @@ def start(body: dict, user=Depends(auth.current_user)):
         activity.add(fid, "live", actor=user, post_id=sid,
                      text=f"{title} · /#/live/{sid}")
     return {"id": sid, "title": title, "max_streams": MAX_STREAMS}
+
+
+@router.post("/{sid}/like")
+def like(sid: int, user=Depends(auth.current_user)):
+    st = db.one("SELECT * FROM live_streams WHERE id=?", (sid,))
+    if not st or st["ended_at"]:
+        raise HTTPException(404, "Эфир не найден или уже закончился")
+    now = time.time()
+    with _throttle_lock:
+        last = _last_like.get((sid, user["id"]), 0)
+        if now - last < LIKE_MIN_INTERVAL:
+            raise HTTPException(429, "Слишком быстро — подождите секунду")
+        _last_like[(sid, user["id"])] = now
+    db.run("INSERT INTO live_likes (stream_id, user_id, created_at) VALUES (?,?,?)",
+           (sid, user["id"], db.now()))
+    likes = db.one("SELECT COUNT(*) c FROM live_likes WHERE stream_id=?", (sid,))["c"]
+    _push_likes(sid, likes)
+    return {"likes": likes}
 
 
 @router.post("/end")

@@ -1,4 +1,4 @@
-const CACHE = 'potatos-v17';
+const CACHE = 'potatos-v32';
 const ASSETS = [
   '/', '/static/style.css', '/static/app.js', '/static/feed.js',
   '/static/chats.js', '/static/profile.js', '/static/admin.js', '/static/live.js',

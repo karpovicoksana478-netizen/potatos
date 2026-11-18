@@ -198,3 +198,4 @@ async def concat(files: list[UploadFile] = File(...),
         _run(["-f", "concat", "-safe", "0", "-i", listing, "-c", "copy", out])
         path = _store(out)
     return {"media": path, "kind": "video", "count": len(files)}
+

@@ -14,7 +14,7 @@ def _members(chat_id: int):
 
 def _last_message(chat_id: int):
     return db.one(
-        "SELECT m.*, u.username, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON u.id=m.user_id "
+        "SELECT m.*, u.username, u.nickname, u.avatar, u.verified FROM messages m LEFT JOIN users u ON u.id=m.user_id "
         "WHERE m.chat_id=? ORDER BY m.id DESC LIMIT 1", (chat_id,))
 
 
@@ -112,7 +112,7 @@ def message_payload(m: dict) -> dict:
     return {
         "id": m["id"], "chat_id": m["chat_id"], "user_id": m["user_id"], "kind": m["kind"],
         "text": m["text"], "media": m["media"], "created_at": m["created_at"],
-        "author": {"username": m.get("username"), "nickname": m.get("nickname"), "avatar": m.get("avatar")},
+        "author": {"username": m.get("username"), "nickname": m.get("nickname"), "avatar": m.get("avatar"), "verified": bool(m.get("verified") or 0)},
     }
 
 
@@ -248,11 +248,11 @@ def messages(chat_id: int, before: int = 0, user=Depends(auth.current_user)):
     _member_or_403(chat_id, user)
     if before:
         items = db.rows(
-            "SELECT m.*, u.username, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON u.id=m.user_id "
+            "SELECT m.*, u.username, u.nickname, u.avatar, u.verified FROM messages m LEFT JOIN users u ON u.id=m.user_id "
             "WHERE m.chat_id=? AND m.id<? ORDER BY m.id DESC LIMIT 50", (chat_id, before))
     else:
         items = db.rows(
-            "SELECT m.*, u.username, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON u.id=m.user_id "
+            "SELECT m.*, u.username, u.nickname, u.avatar, u.verified FROM messages m LEFT JOIN users u ON u.id=m.user_id "
             "WHERE m.chat_id=? ORDER BY m.id DESC LIMIT 50", (chat_id,))
     items.reverse()
     return {"items": [message_payload(m) for m in items]}
@@ -301,7 +301,7 @@ async def send_message(chat_id: int,
 
     mid = db.run("INSERT INTO messages (chat_id, user_id, kind, text, media, created_at) "
                  "VALUES (?,?,?,?,?,?)", (chat_id, user["id"], kind, text[:4000], media, db.now()))
-    m = db.one("SELECT m.*, u.username, u.nickname, u.avatar FROM messages m "
+    m = db.one("SELECT m.*, u.username, u.nickname, u.avatar, u.verified FROM messages m "
                "LEFT JOIN users u ON u.id=m.user_id WHERE m.id=?", (mid,))
     db.run("INSERT OR REPLACE INTO reads (chat_id, user_id, last_id) VALUES (?,?,?)",
            (chat_id, user["id"], mid))
@@ -502,7 +502,7 @@ def delete_message(chat_id: int, mid: int, user=Depends(auth.current_user)):
 def members(chat_id: int, user=Depends(auth.current_user)):
     _member_or_403(chat_id, user)
     items = db.rows(
-        "SELECT u.id, u.username, u.nickname, u.avatar, m.role FROM chat_members m "
+        "SELECT u.id, u.username, u.nickname, u.avatar, u.verified, m.role FROM chat_members m "
         "JOIN users u ON u.id=m.user_id WHERE m.chat_id=? ORDER BY m.joined_at", (chat_id,))
     return {"items": items}
 

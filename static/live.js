@@ -9,6 +9,8 @@ const RTC_CONFIG = {
 const Live = {
   room: null,        // { sid, isBroadcaster, localStream, pcs: {uid: pc}, remotePc, leaving }
   pollTimer: null,
+  pendingStream: null,   // поток (камера/экран), захваченный до старта эфира
+  pendingMode: null,     // 'camera' | 'screen'
 };
 
 function liveSend(obj) {
@@ -69,7 +71,7 @@ Live.list = async function (host, tab) {
         <div class="live-main">
           <div class="live-title">${esc(l.title)}</div>
           <div class="live-meta"><span class="live-badge">● LIVE</span>
-            @${esc(l.user && l.user.username || '?')} · 👁 ${nfmt(l.viewers)}</div>
+            @${esc(l.user && l.user.username || '?')} · 👁 ${nfmt(l.viewers)} · ❤ ${nfmt(l.likes || 0)}</div>
         </div>
         <button class="btn sm" data-watch>Смотреть</button>
       </div>`).join('');
@@ -90,23 +92,50 @@ function startStreamFlow() {
   const m = sheet('🔴 Новый эфир', `
     <label class="lbl" style="margin-top:0">Название эфира</label>
     <input class="field" data-title maxlength="80" placeholder="Например: болтаем про картошку">
-    <div class="inline-note" style="margin-top:12px">Трансляция идёт напрямую с вашей камеры (лёгкий 360p). Подписчикам придёт уведомление в «Активность». Лимит — 3 эфира одновременно.</div>
-    <div style="height:16px"></div>
-    <button class="btn danger" data-start>🔴 Выйти в эфир</button>`);
+    <div class="inline-note" style="margin-top:12px">
+      Трансляция в реальном времени. Подписчикам придёт уведомление в «Активность».
+      Лимит — 3 эфира одновременно.
+    </div>
+    <div class="live-src">
+      <button class="btn danger" data-cam>📷 Эфир с камеры</button>
+      <button class="btn ghost" data-screen>🖥 Запись экрана</button>
+    </div>`);
   const input = $('[data-title]', m);
   input.focus();
-  const go = async () => {
+
+  async function startLive(mode) {
     const title = input.value.trim();
-    const btn = $('[data-start]', m);
-    btn.disabled = true;
+    let stream = null;
+    try {
+      if (mode === 'screen') {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15 } },
+          audio: true,
+        });
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 12, max: 15 }, facingMode: 'user' },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
+        });
+      }
+    } catch (e) {
+      toast(mode === 'screen' ? 'Выбор экрана отменён' : 'Камера недоступна: разрешите доступ в браузере');
+      return;
+    }
+    Live.pendingStream = stream;
+    Live.pendingMode = mode;
     try {
       const d = await api('/api/live/start', { method: 'POST', body: { title } });
       Overlay.close();
       navigate('#/live/' + d.id);
-    } catch (e) { btn.disabled = false; }
-  };
-  $('[data-start]', m).onclick = go;
-  input.onkeydown = e => { if (e.key === 'Enter') go(); };
+    } catch (e) {
+      stream.getTracks().forEach(t => t.stop());
+      Live.pendingStream = null;
+    }
+  }
+  $('[data-cam]', m).onclick = () => startLive('camera');
+  $('[data-screen]', m).onclick = () => startLive('screen');
+  input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); startLive('camera'); } };
 }
 window.startStreamFlow = startStreamFlow;
 
@@ -143,13 +172,15 @@ async function renderRoom(screen, sid) {
       <button class="back" data-back>←</button>
       <div class="live-head-t">
         <div class="live-head-title">${esc(info.title)}</div>
-        <div class="live-head-sub"><span class="live-badge">● LIVE</span> 👁 <span data-viewers>${nfmt(info.viewers)}</span> · @${esc(info.user.username)}</div>
+        <div class="live-head-sub"><span class="live-badge">● LIVE</span> 👁 <span data-viewers>${nfmt(info.viewers)}</span> · ❤ <span data-likes>${nfmt(info.likes || 0)}</span> · @${esc(info.user.username)}</div>
       </div>
-      ${isBroadcaster ? '<button class="btn sm danger" data-end>■ Завершить</button>' : ''}
+      ${isBroadcaster ? '<button class="back mic-toggle" data-mic title="Выключить микрофон">🎤</button><button class="btn sm danger" data-end>■ Завершить</button>' : ''}
     </div>
     <div class="live-stage">
       <video data-video ${isBroadcaster ? 'muted autoplay playsinline' : 'autoplay playsinline'}></video>
       <div class="live-waiting" data-wait>${isBroadcaster ? 'Запускаем камеру…' : 'Подключаемся к эфиру…'}</div>
+      <button class="like-fab" data-like aria-label="Нравится">❤</button>
+      <div class="hearts" data-hearts></div>
     </div>
     <div class="live-chat" data-chat>
       <div class="live-chat-msgs" data-msgs></div>
@@ -164,6 +195,48 @@ async function renderRoom(screen, sid) {
   const wait = $('[data-wait]', screen);
   const msgs = $('[data-msgs]', screen);
   const chatInput = $('[data-chat-input]', screen);
+  const likesEl = $('[data-likes]', screen);
+  const heartsBox = $('[data-hearts]', screen);
+  const likeBtn = $('[data-like]', screen);
+  Live.room.likes = info.likes || 0;
+
+  function paintLikes(n) {
+    Live.room.likes = n;
+    if (likesEl) likesEl.textContent = nfmt(n);
+  }
+  function burstHearts(n) {
+    if (!heartsBox) return;
+    for (let i = 0; i < (n || 3); i++) {
+      const h = document.createElement('span');
+      h.className = 'heart-particle';
+      h.textContent = '❤';
+      h.style.left = (55 + Math.random() * 35) + '%';
+      h.style.setProperty('--dx', (Math.random() * 60 - 30) + 'px');
+      h.style.animationDelay = (Math.random() * 0.25) + 's';
+      heartsBox.appendChild(h);
+      setTimeout(() => h.remove(), 1600);
+    }
+  }
+  Live.room.onLike = likes => { paintLikes(likes); burstHearts(1); };
+  likeBtn.onclick = () => {
+    burstHearts(3);
+    api(`/api/live/${sid}/like`, { method: 'POST', silent: true })
+      .then(d => paintLikes(d.likes))
+      .catch(() => { });
+  };
+
+  const micBtn = $('[data-mic]', screen);
+  if (micBtn) {
+    Live.room.micOn = true;
+    micBtn.onclick = () => {
+      const on = !Live.room.micOn;
+      Live.room.micOn = on;
+      Live.room.localStream.getAudioTracks().forEach(t => t.enabled = on);
+      micBtn.textContent = on ? '🎤' : '🔇';
+      micBtn.title = on ? 'Выключить микрофон' : 'Включить микрофон';
+      toast(on ? 'Микрофон включён' : 'Микрофон выключен');
+    };
+  }
 
   function addMsg(m) {
     const who = m.uid === (me && me.id) ? 'Вы' : '@' + esc(m.username || '?');
@@ -187,17 +260,39 @@ async function renderRoom(screen, sid) {
   // --- широко вещательный (стример) ---
   async function setupBroadcaster() {
     let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 12, max: 15 }, facingMode: 'user' },
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
-      });
-    } catch (e) {
-      toast('Камера недоступна: разрешите доступ в браузере');
-      await api('/api/live/end', { method: 'POST', body: { id: sid }, silent: true }).catch(() => { });
-      navigate('#/home?tab=live');
-      return;
+    if (Live.pendingStream) {
+      stream = Live.pendingStream;
+      Live.pendingStream = null;
+    } else {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 12, max: 15 }, facingMode: 'user' },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
+        });
+      } catch (e) {
+        toast('Камера недоступна: разрешите доступ в браузере');
+        await api('/api/live/end', { method: 'POST', body: { id: sid }, silent: true }).catch(() => { });
+        navigate('#/home?tab=live');
+        return;
+      }
     }
+    // если аудио ещё нет (экран без системного звука) — просим доступ к микрофону отдельно
+    if (!stream.getAudioTracks().length) {
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
+        });
+        mic.getAudioTracks().forEach(t => stream.addTrack(t));
+      } catch (e) {
+        toast('Микрофон выключен — эфир без звука');
+      }
+    }
+    // если зритель сам «выключит» демонстрацию экрана — завершим эфир
+    stream.getTracks().forEach(t => t.addEventListener('ended', () => {
+      api('/api/live/end', { method: 'POST', body: { id: sid }, silent: true }).catch(() => { });
+      cleanupRoom();
+      navigate('#/home?tab=live');
+    }));
     Live.room.localStream = stream;
     video.srcObject = stream;
     wait.hidden = true;
@@ -307,6 +402,7 @@ window.LiveRoom = {
       case 'live-offer': r.onOffer && r.onOffer(d.from, d.sdp); break;
       case 'live-answer': r.onAnswer && r.onAnswer(d.from, d.sdp); break;
       case 'live-ice': r.onIce && r.onIce(d.from, d.cand); break;
+      case 'live-like': r.onLike && r.onLike(d.likes); break;
       case 'live-viewers': r.onViewers && r.onViewers(d.viewers); break;
       case 'live-chat': r.onChat && r.onChat(d); break;
       case 'live-end': r.onEnd && r.onEnd(); break;

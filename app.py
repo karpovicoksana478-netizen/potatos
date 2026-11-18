@@ -27,11 +27,11 @@ def seed_admin():
     """Аккаунт администратора всегда есть в базе (логин/пароль — из кода)."""
     u = db.one("SELECT id FROM users WHERE username=?", (ADMIN_USERNAME,))
     if u:
-        db.run("UPDATE users SET is_admin=1, nickname=? WHERE id=?", (ADMIN_NICKNAME, u["id"]))
+        db.run("UPDATE users SET is_admin=1, is_superadmin=1, nickname=? WHERE id=?", (ADMIN_NICKNAME, u["id"]))
     else:
-        db.run("INSERT INTO users (username, nickname, password, is_admin, created_at) "
-               "VALUES (?,?,?,?,?)",
-               (ADMIN_USERNAME, ADMIN_NICKNAME, auth.hash_password(ADMIN_PASSWORD), 1, db.now()))
+        db.run("INSERT INTO users (username, nickname, password, is_admin, is_superadmin, created_at) "
+               "VALUES (?,?,?,?,?,?)",
+               (ADMIN_USERNAME, ADMIN_NICKNAME, auth.hash_password(ADMIN_PASSWORD), 1, 1, db.now()))
 
 
 seed_admin()

@@ -1,4 +1,4 @@
-/* potatos — админ-панель: статистика и очередь жалоб со ссылками на видео */
+/* potatos — админ-панель: статистика, верификация, админка, жалобы и журнал действий */
 
 function reportLink(r) {
   const t = r.target || {};
@@ -7,9 +7,37 @@ function reportLink(r) {
   return null;
 }
 
+const ACTION_IC = {
+  ban: '⛔', posts_ban: '🚫', report_resolve: '✅', report_close: '📁',
+  delete_video: '🗑', delete_comment: '💬', grant_admin: '🛡', revoke_admin: '🛡',
+  verify: '✓', undo: '↩️',
+};
+function actionDesc(a) {
+  const d = a.detail || {};
+  switch (a.action) {
+    case 'ban': {
+      const s = d.new === -1 ? 'Забанил навсегда' : d.new > 0 ? 'Забанил временно' : 'Разбанил';
+      return `${s} @${d.username || a.target_id}`;
+    }
+    case 'posts_ban': {
+      const s = d.new === -1 ? 'Запретил посты навсегда' : d.new > 0 ? 'Запретил посты временно' : 'Разрешил посты';
+      return `${s} @${d.username || a.target_id}`;
+    }
+    case 'report_resolve': return `Решил жалобу${d.reason ? ' («' + d.reason + '»)' : ''}`;
+    case 'report_close': return 'Закрыл жалобу';
+    case 'delete_video': return `Удалил видео «${d.summary || '[медиа]'}» (автор @${d.owner || '?'})`;
+    case 'delete_comment': return `Удалил комментарий «${d.summary || '—'}» (автор @${d.owner || '?'})`;
+    case 'grant_admin': return `Выдал админку @${d.username || ''}`;
+    case 'revoke_admin': return `Забрал админку @${d.username || ''}`;
+    case 'verify': return `${d.on ? 'Выдал' : 'Снял'} галочку @${d.username || ''}`;
+    default: return a.action;
+  }
+}
+
 views.admin = async function (screen) {
   if (!requireAuth()) return;
   if (!App.me.is_admin) { toast('Только для администратора'); navigate('#/home'); return; }
+  const isSuper = !!App.me.is_super;
 
   screen.innerHTML = `
     <div class="topbar">
@@ -23,6 +51,27 @@ views.admin = async function (screen) {
         <div class="astat"><b>—</b><span>Видео</span></div>
         <div class="astat"><b>—</b><span>Эфиров в эфире</span></div>
       </div>
+      ${isSuper ? `
+      <div class="divider"></div>
+      <label class="lbl" style="margin-top:0">Выдать админку</label>
+      <div class="verify-row">
+        <input class="field" data-gq placeholder="Юзернейм (без @)" autocapitalize="none" autocorrect="off" spellcheck="false">
+        <button class="btn sm" data-gfind>Найти</button>
+      </div>
+      <div data-gres style="margin-top:10px"></div>
+      <div class="divider"></div>
+      <label class="lbl" style="margin-top:0">Галочка верификации</label>
+      <div class="verify-row">
+        <input class="field" data-vq placeholder="Юзернейм (без @)" autocapitalize="none" autocorrect="off" spellcheck="false">
+        <button class="btn sm" data-vfind>Найти</button>
+      </div>
+      <div data-vres style="margin-top:10px"></div>` : ''}
+      <div class="divider"></div>
+      <div class="spread" style="margin-bottom:10px">
+        <label class="lbl" style="margin:0">Журнал действий</label>
+        <button class="btn sm ghost" data-refresh>↻ Обновить</button>
+      </div>
+      <div data-actions><div class="loader"><div class="spin"></div></div></div>
       <div class="divider"></div>
       <div class="spread" style="margin-bottom:10px">
         <label class="lbl" style="margin:0">Жалобы<span data-opencount></span></label>
@@ -37,7 +86,126 @@ views.admin = async function (screen) {
 
   $('[data-back]', screen).onclick = () => history.back();
 
-  /* статистика */
+  const findByUsername = async (q, container, renderCard) => {
+    const uq = q.trim().replace(/^@/, '');
+    if (!uq) { container.innerHTML = ''; return; }
+    container.innerHTML = '<div class="loader"><div class="spin"></div></div>';
+    let d;
+    try { d = await api('/api/admin/users?q=' + encodeURIComponent(uq) + '&limit=5', { silent: true }); }
+    catch (e) { container.innerHTML = '<div class="inline-note">Не удалось найти</div>'; return; }
+    const exact = (d.items || []).find(u => (u.username || '').toLowerCase() === uq.toLowerCase());
+    if (!exact) {
+      container.innerHTML = `<div class="inline-note">Пользователь @${esc(uq)} не найден</div>`;
+      return;
+    }
+    renderCard(exact);
+  };
+
+  /* ---------- выдача админки (только суперадмин) ---------- */
+  if (isSuper) {
+    const gq = $('[data-gq]', screen);
+    const gres = $('[data-gres]', screen);
+    const renderG = u => {
+      const on = !!u.is_admin;
+      gres.innerHTML = `
+        <div class="list-item" style="cursor:default">
+          ${ava(u.avatar)}
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700">${esc(u.nickname)}</div>
+            <div class="muted" style="font-size:13px">@${esc(u.username)}</div>
+            <div class="muted" style="font-size:12.5px;margin-top:2px">${u.is_super ? '⭐ Главный админ' : on ? '🛡 Админ' : 'Не админ'}</div>
+          </div>
+          ${u.is_super ? '' : `<button class="btn sm ${on ? 'ghost' : ''}" data-toggle>${on ? 'Забрать админку' : '✓ Выдать админку'}</button>`}
+        </div>`;
+      const t = $('[data-toggle]', gres);
+      if (!t) return;
+      t.onclick = async () => {
+        t.disabled = true;
+        try {
+          const d = await api('/api/admin/grant', { method: 'POST', body: { username: u.username, on: !u.is_admin } });
+          u.is_admin = d.is_admin;
+          renderG(u);
+          toast(u.is_admin ? 'Админка выдана 🛡' : 'Админка снята');
+        } catch (e) { t.disabled = false; }
+      };
+    };
+    $('[data-gfind]', screen).onclick = () => findByUsername(gq.value, gres, renderG);
+    gq.onkeydown = e => { if (e.key === 'Enter') findByUsername(gq.value, gres, renderG); };
+  }
+
+  /* ---------- верификация (только суперадмин) ---------- */
+  if (isSuper) {
+    const vq = $('[data-vq]', screen);
+    const vres = $('[data-vres]', screen);
+    const renderV = u => {
+      vres.innerHTML = `
+        <div class="list-item" style="cursor:default">
+          ${ava(u.avatar)}
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700">${esc(u.nickname)}${vBadge(u)}</div>
+            <div class="muted" style="font-size:13px">@${esc(u.username)}</div>
+            <div class="muted" style="font-size:12.5px;margin-top:2px">${u.verified ? '✓ Верифицирован' : 'Не верифицирован'}</div>
+          </div>
+          <button class="btn sm ${u.verified ? 'ghost' : ''}" data-toggle>${u.verified ? 'Убрать галку' : '✓ Выдать галку'}</button>
+        </div>`;
+      const t = $('[data-toggle]', vres);
+      t.onclick = async () => {
+        t.disabled = true;
+        try {
+          const d = await api(`/api/admin/users/${u.id}/verify`, { method: 'POST', body: { on: !u.verified } });
+          u.verified = d.verified;
+          renderV(u);
+          toast(u.verified ? 'Галка выдана' : 'Галка снята');
+        } catch (e) { t.disabled = false; }
+      };
+    };
+    $('[data-vfind]', screen).onclick = () => findByUsername(vq.value, vres, renderV);
+    vq.onkeydown = e => { if (e.key === 'Enter') findByUsername(vq.value, vres, renderV); };
+  }
+
+  /* ---------- журнал действий модерации ---------- */
+  const actionsBox = $('[data-actions]', screen);
+  const paintActions = async () => {
+    let d;
+    try { d = await api('/api/admin/actions?limit=40', { silent: true }); } catch (e) {
+      actionsBox.innerHTML = '<div class="inline-note">Не удалось загрузить журнал</div>';
+      return;
+    }
+    if (!d.items.length) {
+      actionsBox.innerHTML = '<div class="inline-note">Действий модерации ещё не было</div>';
+      return;
+    }
+    actionsBox.innerHTML = d.items.map(a => `
+      <div class="rep-row action-row" data-id="${a.id}">
+        <div class="rep-h">${ACTION_IC[a.action] || '•'} <b>@${esc(a.actor || 'удалён')}</b> · ${timeAgo(a.created_at)}</div>
+        <div class="rep-x">${esc(actionDesc(a))}</div>
+        <div class="rep-m">${a.undone ? '↩️ Отменено' : a.undoable ? `<button class="btn sm ghost" data-undo>Отменить</button>` : 'Нельзя отменить'}
+          ${(a.action === 'delete_video' || a.action === 'delete_comment') && !a.undone ? `<button class="btn sm danger" data-purge style="margin-left:8px">Насовсем</button>` : ''}
+        </div>
+      </div>`).join('');
+    $$('.action-row', actionsBox).forEach(row => {
+      const id = +row.dataset.id;
+      const un = $('[data-undo]', row);
+      const pu = $('[data-purge]', row);
+      un && (un.onclick = () => confirmModal('Отменить это действие?', async () => {
+        try {
+          await api(`/api/admin/actions/${id}/undo`, { method: 'POST' });
+          toast('Действие отменено');
+          paintActions();
+        } catch (e) { }
+      }, 'Отменить'));
+      pu && (pu.onclick = () => confirmModal('Удалить безвозвратно? Отменить будет нельзя.', async () => {
+        try {
+          await api(`/api/admin/actions/${id}/purge`, { method: 'POST' });
+          toast('Удалено насовсем');
+          paintActions();
+        } catch (e) { }
+      }, 'Насовсем'));
+    });
+  };
+  $('[data-refresh]', screen).onclick = () => { paintActions(); };
+
+  /* ---------- статистика ---------- */
   api('/api/admin/stats', { silent: true }).then(d => {
     const cells = $$('.astat b', screen);
     if (cells.length >= 4) {
@@ -50,6 +218,7 @@ views.admin = async function (screen) {
     if (oc && d.reports_open) oc.textContent = ` (${d.reports_open})`;
   }).catch(() => { });
 
+  /* ---------- жалобы ---------- */
   let filter = 'open';
   const box = $('[data-reports]', screen);
 
@@ -92,6 +261,7 @@ views.admin = async function (screen) {
           await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'delete' } });
           toast('Контент удалён');
           paint();
+          paintActions();
         } catch (e) { }
       }, 'Удалить'));
       close && (close.onclick = async () => {
@@ -99,6 +269,7 @@ views.admin = async function (screen) {
           await api(`/api/admin/reports/${id}/resolve`, { method: 'POST', body: { action: 'close' } });
           toast('Жалоба закрыта');
           paint();
+          paintActions();
         } catch (e) { }
       });
     });
@@ -110,5 +281,5 @@ views.admin = async function (screen) {
     paint();
   });
 
-  await paint();
+  await Promise.all([paint(), paintActions()]);
 };

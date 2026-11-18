@@ -1,0 +1,22 @@
+[Unit]
+Description=potatos — FastAPI messenger/PWA
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/potatos
+Environment=PORT=8000
+Environment=POTATOS_DATA=/opt/potatos-data
+Environment=POTATOS_ADMIN_PASSWORD=change_me_strong_password
+ExecStart=/opt/potatos/.venv/bin/python run.py
+Restart=always
+RestartSec=5
+
+# защита
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -76,7 +76,10 @@ def public_user(u: dict, extra: dict = None) -> dict:
         "nickname": u["nickname"],
         "bio": u.get("bio", ""),
         "avatar": u.get("avatar", ""),
+        "banner": u.get("banner", ""),
         "is_admin": bool(u.get("is_admin") or 0),
+        "is_super": bool(u.get("is_superadmin") or 0),
+        "verified": bool(u.get("verified") or 0),
         "online": db.online(u),
     }
     if extra:

@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS users (
   password TEXT NOT NULL,
   bio TEXT NOT NULL DEFAULT '',
   avatar TEXT NOT NULL DEFAULT '',
+  banner TEXT NOT NULL DEFAULT '',
   is_admin INTEGER NOT NULL DEFAULT 0,
+  is_superadmin INTEGER NOT NULL DEFAULT 0,
+  verified INTEGER NOT NULL DEFAULT 0,
   banned_until INTEGER NOT NULL DEFAULT 0,
   posts_banned_until INTEGER NOT NULL DEFAULT 0,
   last_seen INTEGER NOT NULL DEFAULT 0,
@@ -144,6 +147,24 @@ CREATE TABLE IF NOT EXISTS push_subs (
   auth TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS live_likes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stream_id INTEGER NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}',
+  undoable INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  reversed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions(created_at DESC);
 CREATE TABLE IF NOT EXISTS live_streams (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -166,6 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_video ON comments(video_id, id);
 CREATE INDEX IF NOT EXISTS idx_chats_activity ON chats(type, owner_id);
 CREATE INDEX IF NOT EXISTS idx_live_active ON live_streams(ended_at);
+CREATE INDEX IF NOT EXISTS idx_live_likes ON live_likes(stream_id);
 """
 
 
@@ -186,9 +208,16 @@ def _migrate():
          "ALTER TABLE users ADD COLUMN posts_banned_until INTEGER NOT NULL DEFAULT 0"),
         ("last_seen", "ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0"),
         ("device_id", "ALTER TABLE users ADD COLUMN device_id TEXT NOT NULL DEFAULT ''"),
+        ("banner", "ALTER TABLE users ADD COLUMN banner TEXT NOT NULL DEFAULT ''"),
+        ("verified", "ALTER TABLE users ADD COLUMN verified INTEGER NOT NULL DEFAULT 0"),
+        ("is_superadmin", "ALTER TABLE users ADD COLUMN is_superadmin INTEGER NOT NULL DEFAULT 0"),
     ):
         if col not in uhave:
             db().execute(sql)
+    # главный администратор (id=1) — суперадмин
+    uhave2 = {r["name"] for r in db().execute("PRAGMA table_info(users)")}
+    if "is_superadmin" in uhave2:
+        db().execute("UPDATE users SET is_superadmin=1 WHERE id=1 AND is_superadmin=0")
     # старые уведомления заменены чатом «Активность»
     db().execute("DROP TABLE IF EXISTS notifications")
     db().commit()
@@ -198,6 +227,7 @@ def init():
     os.makedirs(os.path.join(MEDIA, "videos"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "images"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "avatars"), exist_ok=True)
+    os.makedirs(os.path.join(MEDIA, "banners"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "thumbs"), exist_ok=True)
     os.makedirs(os.path.join(MEDIA, "edited"), exist_ok=True)
     db().executescript(SCHEMA)

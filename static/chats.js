@@ -172,7 +172,7 @@ views.chats = async function (screen) {
             ${ava(u.avatar)}
             <div style="flex:1;min-width:0">
               <div style="font-weight:600">${esc(u.nickname)}</div>
-              <div class="muted" style="font-size:13px">@${esc(u.username)}</div>
+              <div class="muted" style="font-size:13px">@${esc(u.username)}${vBadge(u)}</div>
             </div>
             <button class="btn sm ghost" data-open="${esc(u.username)}">Открыть</button>
           </div>`).join('');
@@ -275,7 +275,7 @@ function msgHTML(m, prev) {
 
   return `${day}
   <div class="msg ${mine ? 'me' : ''}${m.kind === 'activity' ? ' act' : ''}" data-id="${m.id}">
-    ${showWho ? `<div class="who" data-prof style="cursor:pointer">@${esc(m.author.username)}</div>` : ''}
+    ${showWho ? `<div class="who" data-prof style="cursor:pointer">@${esc(m.author.username)}${vBadge(m.author)}</div>` : ''}
     ${inner}
     <div class="tm">${timeHM(m.created_at)}</div>
   </div>`;
@@ -304,7 +304,7 @@ views.chat = async function (screen, r) {
         <div class="s">${chat.type === 'channel' ? subs(chat.members_count)
         : chat.type === 'group' ? people(chat.members_count)
           : isAct ? 'лайки, подписки, комментарии'
-          : (chat.peer ? '@' + esc(chat.peer.username) : '')}</div>
+          : (chat.peer ? '@' + esc(chat.peer.username) + vBadge(chat.peer) : '')}</div>
       </div>
       <button class="back" data-menu style="font-size:18px">${isAct ? 'ⓘ' : '⋯'}</button>
     </div>
@@ -584,7 +584,7 @@ function chatMenu(chat) {
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;font-size:14.5px">${esc(u.nickname)}
             ${u.id === App.me.id ? '<span class="muted" style="font-weight:400"> (вы)</span>' : ''}</div>
-          <div class="muted" style="font-size:12.5px">@${esc(u.username)}</div>
+          <div class="muted" style="font-size:12.5px">@${esc(u.username)}${vBadge(u)}</div>
         </div>
         ${u.role === 'owner' ? '<span class="chip adm">владелец</span>'
         : u.role === 'admin' ? '<span class="chip adm">админ</span>' : ''}

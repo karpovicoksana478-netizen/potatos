@@ -33,9 +33,10 @@ a{color:inherit;text-decoration:none}
 .tab .ic{font-size:22px;line-height:1;filter:grayscale(1);opacity:.75;transition:.15s}
 .tab.on{color:var(--text)}
 .tab.on .ic{filter:none;opacity:1;transform:translateY(-1px)}
-.tab.plus .ic{width:44px;height:30px;display:flex;align-items:center;justify-content:center;
-  background:linear-gradient(135deg,var(--accent),#ff8a3d);color:#111;border-radius:10px;
-  font-size:24px;font-weight:700;box-shadow:0 4px 16px rgba(255,160,40,.35);filter:none;opacity:1}
+.tab.plus .ic{width:auto;height:auto;display:flex;align-items:center;justify-content:center;
+  background:transparent;box-shadow:none;filter:none;opacity:1;color:var(--accent);
+  font-size:30px;font-weight:600}
+.tab.on .tab.plus .ic,.tab.plus.on .ic{color:var(--accent)}
 .tab .ava{width:24px;height:24px;border-radius:50%;object-fit:cover;border:1.5px solid transparent}
 .tab.on .ava{border-color:var(--accent)}
 
@@ -496,8 +497,6 @@ html[data-theme=purple] .grid{background:var(--line)}
 html[data-theme=purple] .gcell{background:var(--panel3)}
 html[data-theme=purple] .stat{background:var(--panel)}
 html[data-theme=purple] .auth{background:radial-gradient(1000px 500px at 50% -10%,rgba(181,123,255,.3),transparent 60%),var(--bg)}
-html[data-theme=purple] .tab.plus .ic{background:linear-gradient(135deg,#b57bff,#ff6ad5);
-  color:#170026;box-shadow:0 4px 16px rgba(181,123,255,.42)}
 html[data-theme=purple] .fab{box-shadow:0 8px 24px rgba(181,123,255,.4)}
 html[data-theme=purple] .theme-card.on{border-color:var(--accent);background:rgba(181,123,255,.14)}
 html[data-theme=purple] .btn{color:#170026}
@@ -563,14 +562,14 @@ html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
 .rep-m{font-size:12.5px;color:var(--muted);margin-top:6px}
 .cmt-act [data-repc]{color:var(--muted);opacity:.8}
 
-/* ---------- репосты ---------- */
+/* ---------- СЂРµРїРѕСЃС‚С‹ ---------- */
 .act.reposted .ico{color:var(--accent)}
 .rep-link{display:inline-block;margin-top:8px;font-size:13.5px}
 
-/* ---------- ссылки в сообщениях ---------- */
+/* ---------- СЃСЃС‹Р»РєРё РІ СЃРѕРѕР±С‰РµРЅРёСЏС… ---------- */
 .msg-link{color:var(--accent);text-decoration:underline;word-break:break-all}
 
-/* ---------- эфиры (список) ---------- */
+/* ---------- СЌС„РёСЂС‹ (СЃРїРёСЃРѕРє) ---------- */
 .live-tab{position:absolute;inset:0}
 .live-scroll{position:absolute;top:calc(46px + env(safe-area-inset-top));left:0;right:0;bottom:0;
   overflow-y:auto;padding:12px 14px;-webkit-overflow-scrolling:touch}
@@ -585,7 +584,7 @@ html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
   font-weight:800;letter-spacing:.6px;border-radius:5px;padding:2px 6px;animation:livePulse 1.6s infinite}
 @keyframes livePulse{0%,100%{opacity:1}50%{opacity:.55}}
 
-/* ---------- эфиры (комната) ---------- */
+/* ---------- СЌС„РёСЂС‹ (РєРѕРјРЅР°С‚Р°) ---------- */
 .live-room{position:absolute;inset:0;display:flex;flex-direction:column;background:#050507}
 .live-head{display:flex;align-items:center;gap:10px;padding:8px 10px;
   padding-top:calc(8px + env(safe-area-inset-top));background:rgba(0,0,0,.55)}
@@ -609,11 +608,94 @@ html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
 .live-input .csend{width:42px;height:42px;border-radius:50%;background:var(--accent);color:#141414;
   font-size:17px;flex:none}
 
-/* ---------- ускорение видео при долгом зажатии ---------- */
+/* ---------- СѓСЃРєРѕСЂРµРЅРёРµ РІРёРґРµРѕ РїСЂРё РґРѕР»РіРѕРј Р·Р°Р¶Р°С‚РёРё ---------- */
 .speed-badge{position:absolute;top:calc(56px + env(safe-area-inset-top));right:12px;z-index:15;
   background:rgba(0,0,0,.65);color:#fff;font-weight:800;font-size:14px;letter-spacing:.5px;
   border-radius:8px;padding:5px 11px;pointer-events:none;animation:speedIn .15s ease}
 @keyframes speedIn{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
 
-/* ---------- результаты поиска: видео ---------- */
+/* ---------- СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°: РІРёРґРµРѕ ---------- */
 .sres-thumb{width:96px;height:54px;object-fit:cover;border-radius:10px;background:var(--panel3);flex:none}
+
+/* ---------- Р±Р°РЅРЅРµСЂ РїСЂРѕС„РёР»СЏ ---------- */
+.prof-banner{position:relative;height:235px;overflow:hidden;z-index:0}
+.prof-banner img{width:100%;height:100%;object-fit:cover;display:block}
+.prof-banner-btn{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.55);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#fff;
+  border:1px solid rgba(255,255,255,.28);font-size:12px;font-weight:600;
+  padding:7px 13px;border-radius:999px;cursor:pointer}
+.prof-head.has-banner{margin-top:-58px;padding-top:0}
+.prof-head.has-banner .ava{border:4px solid var(--bg);box-shadow:0 8px 28px rgba(0,0,0,.45)}
+.banner-stage{background:#050507}
+.banner-stage canvas{border-radius:12px;box-shadow:0 12px 44px rgba(0,0,0,.55)}
+.banner-tools{flex-direction:column;align-items:stretch;gap:12px}
+.banner-bg{width:54px;height:54px;border-radius:15px;border:2px solid rgba(255,255,255,.22);
+  cursor:pointer;transition:.15s}
+.banner-bg.on{border-color:var(--accent);transform:scale(1.12);box-shadow:0 0 0 3px rgba(255,201,60,.3)}
+.banner-bg-img{background:var(--panel3);color:var(--text);font-size:22px}
+
+/* ---------- РґРёР·Р°Р№РЅ-РѕР±РЅРѕРІР»РµРЅРёРµ ---------- */
+::selection{background:rgba(255,201,60,.32)}
+.btn{background:linear-gradient(160deg,#ffdc60 0%,#FFC93C 55%,#f2b134 100%);
+  box-shadow:0 6px 18px rgba(255,201,60,.25),inset 0 1px 0 rgba(255,255,255,.5)}
+.btn:active{transform:scale(.97)}
+.btn.ghost{box-shadow:none}
+.field{border-radius:14px}
+.topbar{box-shadow:0 1px 0 var(--line),0 10px 26px rgba(0,0,0,.3)}
+.ptabs button{transition:color .15s}
+.tab.on .ic{transform:translateY(-2px)}
+.tab{transition:.15s}
+.toast{animation:toastIn .28s ease}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px) scale(.95)}to{opacity:1;transform:none}}
+.sheet{box-shadow:0 -20px 64px rgba(0,0,0,.55)}
+.modal{box-shadow:0 26px 84px rgba(0,0,0,.62)}
+.list-item:active{background:var(--panel2)}
+.circ img,.circ .ph{border:2px solid var(--panel3)}
+.seg button{transition:.15s}
+.seg button.on{box-shadow:0 2px 10px rgba(0,0,0,.3)}
+.feed-top .t{transition:.2s}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:var(--panel3);border-radius:3px}
+*::-webkit-scrollbar-track{background:transparent}
+.prof-actions .btn{flex:1}
+
+/* ---------- Р±Р°РЅРЅРµСЂ РІ СЂРµРґР°РєС‚РѕСЂРµ РїСЂРѕС„РёР»СЏ ---------- */
+.banner-row{display:flex;gap:12px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:12px}
+.banner-prev{width:112px;height:54px;border-radius:12px;object-fit:cover;flex:none;border:1px solid var(--line)}
+.banner-ph{width:112px;height:54px;border-radius:12px;flex:none;display:flex;align-items:center;justify-content:center;
+  border:1px dashed var(--line);color:var(--muted);font-size:12.5px;background:var(--panel3)}
+
+/* ---------- выбор источника эфира ---------- */
+.live-src{display:flex;gap:10px;margin-top:14px}
+.live-src .btn{flex:1}
+
+/* ---------- лайки в эфире ---------- */
+.like-fab{position:absolute;right:14px;bottom:16px;width:58px;height:58px;border-radius:50%;
+  background:rgba(0,0,0,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.25);color:#ff3b5c;font-size:28px;line-height:1;
+  display:flex;align-items:center;justify-content:center;z-index:6;cursor:pointer;transition:.12s}
+.like-fab:active{transform:scale(.82)}
+.hearts{position:absolute;right:0;bottom:0;width:140px;height:70%;pointer-events:none;z-index:5}
+.heart-particle{position:absolute;bottom:60px;font-size:26px;
+  animation:heartUp 1.5s ease-out forwards;opacity:0;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
+@keyframes heartUp{0%{transform:translate(0,0) scale(.5);opacity:0}15%{opacity:1}
+  100%{transform:translate(var(--dx,30px),-190px) scale(1.35);opacity:0}}
+
+/* ---------- галочка верификации ---------- */
+.vbadge{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+  border-radius:50%;background:linear-gradient(135deg,#35c3ff,#1d7fe0);color:#fff;
+  font-size:11px;font-weight:900;line-height:1;vertical-align:-3px;margin-left:4px;
+  box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.verify-row{display:flex;gap:10px}
+.verify-row .field{flex:1}
+.verify-row .btn{flex:none;width:auto}
+
+/* ---------- ровное выравнивание галочки ---------- */
+.vbadge{width:16px;height:16px;font-size:10px;margin-left:4px;vertical-align:-2px}
+.prof-user{display:flex;align-items:center;justify-content:center;gap:6px}
+.msg .who{display:inline-flex;align-items:center;gap:5px}
+.cmt-act button{vertical-align:middle}
+
+/* ---------- микрофон в эфире ---------- */
+.mic-toggle{font-size:18px}

@@ -22,6 +22,10 @@ function mediaURL(p) {
   return '/media/' + p;
 }
 
+function vBadge(u) {
+  return (u && u.verified) ? '<span class="vbadge" title="Верифицирован">✓</span>' : '';
+}
+
 function ava(url, cls = '') {
   if (!url) return `<div class="ava ava-ph ${cls}">🥔</div>`;
   return `<img class="ava ${cls}" src="${esc(mediaURL(url))}" loading="lazy" onerror="App.avaFail(this)">`;
@@ -313,7 +317,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '17';
+const ASSET_V = '32';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -361,7 +365,8 @@ async function render() {
   const view = views[r.name] || views.home;
   screen.scrollTop = 0;
   screen.innerHTML = '';
-  const noNav = ['chat'].includes(r.name);
+  /* чат и комната эфира — на весь экран, без таббара; список «Эфиры» — с таббаром */
+  const noNav = r.name === 'chat' || (r.name === 'live' && !!(r.args && r.args.length));
   screen.classList.toggle('no-nav', noNav);
   const activeTab = ['profile', 'settings', 'edit'].includes(r.name) ? 'profile' : r.name;
   if (noNav) hideTabbar(); else renderTabbar(activeTab);
@@ -488,7 +493,7 @@ App.start = async function () {
 window.App = App;
 window.api = api;
 window.$ = $; window.$$ = $$;
-window.esc = esc; window.ava = ava; window.toast = toast;
+window.esc = esc; window.ava = ava; window.toast = toast; window.vBadge = vBadge;
 window.Theme = Theme;
 window.plural = plural; window.pluralWord = pluralWord;
 window.people = people; window.subs = subs; window.subsWord = subsWord;

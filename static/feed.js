@@ -124,9 +124,9 @@ async function openComments(videoId, onCount) {
     <div class="cmt" data-id="${c.id}">
       <div class="cmt-ava" data-prof="${esc(c.username)}">${ava(c.avatar, 'sm')}</div>
       <div class="b">
-        <div class="u"><b data-prof="${esc(c.username)}">@${esc(c.username)}</b><span>${timeAgo(c.created_at)}</span></div>
+        <div class="u"><b data-prof="${esc(c.username)}">@${esc(c.username)}</b>${vBadge(c)}<span>${timeAgo(c.created_at)}</span></div>
         ${c.parent ? `<div class="cmt-quote" data-qprof="${esc(c.parent.username)}">
-            <b>@${esc(c.parent.username)}</b><i>${esc((c.parent.text || '').slice(0, 120))}</i></div>` : ''}
+            <b>@${esc(c.parent.username)}</b>${vBadge(c.parent)}<i>${esc((c.parent.text || '').slice(0, 120))}</i></div>` : ''}
         ${c.media ? `<img class="cmt-img" src="${esc(mediaURL(c.media))}" alt="">` : ''}
         ${c.text ? `<div class="tx">${esc(c.text)}</div>` : ''}
         <div class="cmt-act"><button data-reply data-ruid="${c.id}" data-ruser="${esc(c.username)}"
@@ -305,8 +305,6 @@ function createFeed(root, opts = {}) {
         : `<button class="follow" data-follow title="Подписаться">+</button>`);
     const chip = (v.mine || !App.me || v.followed) ? '' :
       `<button class="follow-chip" data-follow>Подписаться</button>`;
-    const adminDel = (App.me && App.me.is_admin && !v.mine)
-      ? `<button class="del-badge" data-del title="Удалить видео">🗑</button>` : '';
     return `
     <div class="post" data-id="${v.id}" data-i="${i}">
       ${mediaHTML}
@@ -319,7 +317,6 @@ function createFeed(root, opts = {}) {
         <div class="ava-wrap">
           <div data-openprof style="cursor:pointer">${ava(u.avatar)}</div>
           ${followUI}
-          ${adminDel}
         </div>
         <button class="act ${v.liked ? 'liked' : ''}" data-like title="Нравится">
           <span class="ico">${v.liked ? '❤️' : '🤍'}</span><span class="n" data-likes>${nfmt(v.likes)}</span>
@@ -327,18 +324,15 @@ function createFeed(root, opts = {}) {
         <button class="act" data-comment title="Комментарии">
           <span class="ico">💬</span><span class="n" data-cc>${nfmt(v.comments_count)}</span>
         </button>
-        <button class="act ${v.saved ? 'saved' : ''}" data-save title="Сохранить">
-          <span class="ico">${v.saved ? '🔖' : '📑'}</span>
-        </button>
         <button class="act ${v.reposted ? 'reposted' : ''}" data-repost title="Репост">
           <span class="ico">🔁</span><span class="n" data-reposts>${nfmt(v.reposts || 0)}</span>
         </button>
-        ${(App.me && !v.mine) ? `<button class="act" data-report title="Пожаловаться"><span class="ico">⚠️</span></button>` : ''}
+        <button class="act" data-dots title="Действия"><span class="ico">⋮</span></button>
         <div class="disc">🎵</div>
       </div>
       <div class="meta">
         <div class="nick">
-          <span data-openprof style="cursor:pointer">@${esc(u.username || '')}</span>
+          <span data-openprof style="cursor:pointer">@${esc(u.username || '')}</span>${vBadge(v.user)}
           ${chip}
         </div>
         <div class="cap">${linkTags(v.caption)}</div>
@@ -455,29 +449,72 @@ function createFeed(root, opts = {}) {
       openComments(v.id, () => { v.comments_count++; $('[data-cc]', p).textContent = nfmt(v.comments_count); });
     };
 
-    const saveBtn = $('[data-save]', p);
-    saveBtn.onclick = e => {
+    /* меню «три точки»: скачать / поделиться / пожаловаться / удалить */
+    const dotsBtn = $('[data-dots]', p);
+    dotsBtn && (dotsBtn.onclick = e => {
       e.stopPropagation();
-      if (!App.me) return navigate('#/auth');
-      api(`/api/video/${v.id}/save`, { method: 'POST' }).then(d => {
-        v.saved = d.saved;
-        saveBtn.classList.toggle('saved', v.saved);
-        $('.ico', saveBtn).textContent = v.saved ? '🔖' : '📑';
-        toast(v.saved ? 'Сохранено' : 'Убрано из сохранённых');
-      }).catch(() => { });
-    };
-
-    const delBtn = $('[data-del]', p);
-    delBtn && (delBtn.onclick = e => {
-      e.stopPropagation();
-      confirmModal('Удалить это видео?', async () => {
-        try {
-          await api(`/api/video/${v.id}`, { method: 'DELETE' });
-          p.remove();
-          st.items = st.items.filter(x => x.id !== v.id);
-          toast('Видео удалено');
-        } catch (err) { }
-      }, 'Удалить');
+      const inGrid = !v.user;
+      const canDelete = App.me && (v.mine || App.me.is_admin);
+      const canReport = App.me && !v.mine;
+      const actions = [];
+      actions.push(`<button class="menu-item" data-act="download"><span class="ic">⬇</span>Скачать ${v.kind === 'photo' ? 'фото' : 'видео'}</button>`);
+      actions.push('<button class="menu-item" data-act="share"><span class="ic">🔗</span>Поделиться ссылкой</button>');
+      if (canReport) actions.push('<button class="menu-item" data-act="report"><span class="ic">⚠️</span>Пожаловаться</button>');
+      if (canDelete) actions.push('<button class="menu-item danger" data-act="delete"><span class="ic">🗑</span>Удалить видео</button>');
+      const m = sheet('Действия', actions.join(''));
+      $$('[data-act]', m).forEach(btn => btn.onclick = async () => {
+        const act = btn.dataset.act;
+        if (act === 'download') {
+          Overlay.close();
+          try {
+            const res = await fetch('/media/' + v.media);
+            const blob = await res.blob();
+            const name = v.media.split('/').pop() || 'potatos-media';
+            const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+                title: v.caption || 'potatos',
+                text: v.caption || undefined,
+              });
+              return;
+            }
+            const a = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+            toast('Скачиваю…');
+          } catch (e) {
+            // запасной вариант — прямая ссылка под скачивание
+            const a = document.createElement('a');
+            a.href = '/media/' + v.media;
+            a.download = v.media.split('/').pop();
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        } else if (act === 'share') {
+          const url = location.origin + '/#/video/' + v.id;
+          try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована'); }
+          catch (e) { toast(url); }
+          Overlay.close();
+        } else if (act === 'report') {
+          Overlay.close();
+          reportSheet('post', v.id);
+        } else if (act === 'delete') {
+          confirmModal('Удалить это видео?', async () => {
+            try {
+              await api(`/api/video/${v.id}`, { method: 'DELETE' });
+              p.remove();
+              st.items = st.items.filter(x => x.id !== v.id);
+              toast('Видео удалено');
+            } catch (err) { }
+          }, 'Удалить');
+        }
+      });
     });
 
     const repostBtn = $('[data-repost]', p);
@@ -491,12 +528,6 @@ function createFeed(root, opts = {}) {
         $('[data-reposts]', repostBtn).textContent = nfmt(v.reposts);
         toast(v.reposted ? 'Репост сделан' : 'Репост убран');
       }).catch(() => { }).finally(() => { repostBtn.disabled = false; });
-    });
-
-    const repBtn = $('[data-report]', p);
-    repBtn && (repBtn.onclick = e => {
-      e.stopPropagation();
-      reportSheet('post', v.id);
     });
 
     if (media.tagName === 'VIDEO') {

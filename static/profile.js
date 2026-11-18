@@ -43,10 +43,6 @@ views.profile = async function (screen, r) {
   } catch (e) { navigate('#/home'); return; }
 
   const loadTab = async () => {
-    if (tab === 'saved') {
-      const d = await api('/api/saved');
-      return d.items;
-    }
     const d = await api(`/api/user/${encodeURIComponent(username)}/videos?tab=${tab}`);
     return d.items;
   };
@@ -55,9 +51,8 @@ views.profile = async function (screen, r) {
     const items = await loadTab().catch(() => []);
     const grid = $('[data-grid]', screen);
     if (grid) {
-      grid.innerHTML = videoGrid(items, tab === 'saved' ? 'Нет сохранённых видео'
-        : tab === 'liked' ? 'Пока нет лайков'
-          : tab === 'reposted' ? 'Пока нет репостов' : 'Пока нет видео');
+      grid.innerHTML = videoGrid(items, tab === 'liked' ? 'Пока нет лайков'
+        : tab === 'reposted' ? 'Пока нет репостов' : 'Пока нет видео');
       $$('.gcell', grid).forEach(c => c.onclick = () => openFeedOverlay(items, +c.dataset.i));
     }
   }
@@ -68,13 +63,14 @@ views.profile = async function (screen, r) {
       <h1 style="font-size:16px">@${esc(prof.username)}</h1>
       ${isMe ? `<button class="back" data-settings style="font-size:17px">⚙</button>` : ''}
     </div>
-    <div class="prof-head">
+    ${prof.banner ? `<div class="prof-banner"><img src="/media/${esc(prof.banner)}" alt=""></div>` : ''}
+    <div class="prof-head${prof.banner ? ' has-banner' : ''}">
       <div class="ava-box">
         ${ava(prof.avatar, 'lg')}
         ${adm ? '<button class="prof-adm" data-adm title="Действия администратора">🛡</button>' : ''}
       </div>
       <div class="prof-nick">${esc(prof.nickname)}</div>
-      <div class="prof-user">@${esc(prof.username)}</div>
+      <div class="prof-user">@${esc(prof.username)}${vBadge(prof)}</div>
       ${prof.bio ? `<div class="prof-bio">${esc(prof.bio)}</div>` : ''}
       <div class="stats">
         <div class="stat"><b>${nfmt(stats.following)}</b><span>${pluralWord(stats.following, 'подписка', 'подписки', 'подписок')}</span></div>
@@ -83,14 +79,14 @@ views.profile = async function (screen, r) {
       </div>
     </div>
     <div class="prof-actions">
-      ${isMe ? `<button class="btn ghost" data-edit>Редактировать профиль</button>`
+      ${isMe ? `<button class="btn ghost" data-edit>Редактировать</button>`
       : `<button class="btn ${stats.followed ? 'ghost' : ''}" data-follow>${stats.followed ? '✓ Вы подписаны' : 'Подписаться'}</button>
-           <button class="btn ghost" data-msg>💬 Написать</button>`}
+            <button class="btn ghost" data-msg>💬 Написать</button>`}
     </div>
     <div data-circles></div>
     <div class="ptabs">
       <button class="on" data-t="videos">Видео</button>
-      ${isMe ? `<button data-t="saved">Сохранённые</button><button data-t="liked">Лайки</button>` : ''}<button data-t="reposted">Репосты</button>
+      ${isMe ? `<button data-t="liked">Лайки</button>` : ''}<button data-t="reposted">Репосты</button>
     </div>
     <div data-grid><div class="loader"><div class="spin"></div></div></div>
     <div style="height:40px"></div>`;
@@ -170,6 +166,18 @@ views.edit = async function (screen) {
         <div class="muted" style="font-size:12.5px">Аватар картошки 🥔</div>
       </div>
 
+      <label class="lbl">Баннер профиля</label>
+      <div class="banner-row">
+        ${me.banner
+          ? `<img class="banner-prev" src="/media/${esc(me.banner)}" alt="">`
+          : `<div class="banner-ph">🖼 Нет баннера</div>`}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:14.5px">Фон за аватаркой</div>
+          <div class="muted" style="font-size:12.5px;margin-top:3px">${me.banner ? 'Есть свой баннер' : 'Можно сделать свой'}</div>
+          <button class="btn sm" data-banner style="margin-top:8px">🖼 ${me.banner ? 'Изменить баннер' : 'Создать баннер'}</button>
+        </div>
+      </div>
+
       <label class="lbl">Ник</label>
       <input class="field" data-nick maxlength="32" value="${esc(me.nickname)}">
 
@@ -207,6 +215,7 @@ views.edit = async function (screen) {
     } catch (e) { }
   };
 
+  $('[data-banner]', screen) && ($('[data-banner]', screen).onclick = () => bannerSheet());
   $('[data-save]', screen).onclick = async () => {
     try {
       const d = await api('/api/me', {
@@ -478,3 +487,148 @@ function adminUserMenu(prof, adm) {
   $$('[data-b]', m).forEach(b => b.onclick = () => act('ban', b.dataset.b));
   $$('[data-p]', m).forEach(b => b.onclick = () => act('posts', b.dataset.p));
 }
+
+/* ---------------- баннер профиля ---------------- */
+const BANNERS = [
+  ['#ff9a3d', '#ff5a5a'],   // закат
+  ['#7c3aed', '#3b82f6'],   // фиолет-синий
+  ['#0ea5e9', '#22c55e'],   // морская волна
+  ['#f43f5e', '#a21caf'],   // ягода
+  ['#111827', '#374151'],   // графит
+  ['#FFC93C', '#ff8a3d'],   // картошка
+  ['#10b981', '#84cc16'],   // лайм
+];
+
+async function bannerSheet() {
+  const m = sheet('🖼 Баннер профиля',
+    '<button class="btn" data-upload>📤 Загрузить картинку</button>'
+    + '<div style="height:10px"></div>'
+    + '<button class="btn" data-create>🎨 Создать в редакторе</button>'
+    + '<div style="height:10px"></div>'
+    + '<button class="btn ghost" data-remove>🗑 Удалить баннер</button>'
+    + '<div class="inline-note" style="margin-top:12px">Баннер — широкий фон (3:1) за вашей аватаркой в профиле.</div>');
+
+  const file = document.createElement('input');
+  file.type = 'file'; file.accept = 'image/*'; file.hidden = true;
+  document.body.appendChild(file);
+  file.onchange = async () => {
+    const f = file.files[0]; file.remove();
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f, f.name);
+    try {
+      const d = await api('/api/me/banner', { method: 'POST', body: fd });
+      App.me = d.user;
+      toast('Баннер обновлён');
+      Overlay.close();
+      render();
+    } catch (e) { }
+  };
+  $('[data-upload]', m).onclick = () => file.click();
+  $('[data-create]', m).onclick = () => { Overlay.close(); bannerBuilder(); };
+  $('[data-remove]', m).onclick = async () => {
+    try {
+      const d = await api('/api/me/banner', { method: 'DELETE' });
+      App.me = d.user;
+      toast('Баннер удалён');
+      Overlay.close();
+      render();
+    } catch (e) { }
+  };
+}
+window.bannerSheet = bannerSheet;
+
+function bannerBuilder() {
+  const nick = (App.me && (App.me.nickname || App.me.username)) || 'potatos';
+  const modal = document.createElement('div');
+  modal.className = 'draw-modal';
+  modal.innerHTML =
+    '<div class="draw-top">'
+    + '<button class="btn sm ghost" data-cancel>✕ Отмена</button>'
+    + '<div class="row" style="gap:8px">'
+    + '<button class="btn sm ghost" data-invert>🌗 Текст</button>'
+    + '<button class="btn sm" data-ok>✓ Сохранить баннер</button>'
+    + '</div>'
+    + '</div>'
+    + '<div class="draw-stage banner-stage"><canvas data-canvas width="1080" height="360"></canvas></div>'
+    + '<div class="draw-tools banner-tools">'
+    + '<div class="draw-colors" data-bgs>'
+    + BANNERS.map((g, i) => '<button class="banner-bg' + (i === 0 ? ' on' : '') + '" data-bg="' + i + '" style="background:linear-gradient(120deg,' + g[0] + ',' + g[1] + ')"></button>').join('')
+    + '<button class="banner-bg banner-bg-img" data-imgbtn title="Своё фото">🖼</button>'
+    + '</div>'
+    + '<input class="field" data-text maxlength="40" placeholder="Надпись (пусто — ваш ник)">'
+    + '</div>'
+    + '<input type="file" accept="image/*" data-file hidden>';
+  document.body.appendChild(modal);
+
+  const cv = $('[data-canvas]', modal);
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  let bg = 0, customImg = null, darkText = false;
+
+  const fileIn = $('[data-file]', modal);
+  const draw = () => {
+    ctx.clearRect(0, 0, W, H);
+    if (customImg) {
+      const s = Math.max(W / customImg.width, H / customImg.height);
+      const w = customImg.width * s, h = customImg.height * s;
+      ctx.drawImage(customImg, (W - w) / 2, (H - h) / 2, w, h);
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      const pair = BANNERS[bg];
+      const g = ctx.createLinearGradient(0, 0, W, H);
+      g.addColorStop(0, pair[0]); g.addColorStop(1, pair[1]);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+    const text = ($('[data-text]', modal).value || nick).trim() || nick;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '800 76px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.shadowColor = darkText ? 'rgba(255,255,255,.4)' : 'rgba(0,0,0,.35)';
+    ctx.shadowBlur = 26;
+    ctx.fillStyle = darkText ? '#111111' : '#ffffff';
+    ctx.fillText(text, W / 2, H / 2, W - 80);
+    ctx.restore();
+  };
+
+  $$('[data-bg]', modal).forEach(b => b.onclick = () => {
+    bg = +b.dataset.bg;
+    customImg = null;
+    $$('[data-bg]', modal).forEach(x => x.classList.toggle('on', x === b));
+    draw();
+  });
+  $('[data-imgbtn]', modal).onclick = () => fileIn.click();
+  fileIn.onchange = () => {
+    const f = fileIn.files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => { customImg = img; URL.revokeObjectURL(url); draw(); };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('Не удалось открыть картинку'); };
+    img.src = url;
+  };
+  $('[data-invert]', modal).onclick = () => { darkText = !darkText; draw(); };
+  $('[data-text]', modal).oninput = draw;
+  const close = () => modal.remove();
+  $('[data-cancel]', modal).onclick = close;
+
+  $('[data-ok]', modal).onclick = () => {
+    const ok = $('[data-ok]', modal);
+    ok.disabled = true;
+    cv.toBlob(blob => {
+      const fd = new FormData();
+      fd.append('file', new File([blob], 'banner.png', { type: 'image/png' }));
+      api('/api/me/banner', { method: 'POST', body: fd }).then(d => {
+        App.me = d.user;
+        toast('Баннер сохранён');
+        close();
+        render();
+      }).catch(() => { ok.disabled = false; });
+    }, 'image/png');
+  };
+
+  draw();
+}
+window.bannerBuilder = bannerBuilder;

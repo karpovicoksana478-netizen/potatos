@@ -2,6 +2,7 @@ import io
 import os
 import random
 import sys
+import time
 
 import httpx
 
@@ -372,7 +373,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=13" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
+    check("shell bumped", "v=32" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -525,6 +526,15 @@ def main():
     check("live: второй эфир от себя отклонён", dup.status_code == 400, dup.status_code)
     live_list = c.get("/api/live", headers=ltok[3]).json()["items"]
     check("live: в списке 3 эфира", len(live_list) == 3, live_list)
+    # лайки на стримах: счётчик растёт, виден в списке эфиров
+    lk1 = c.post(f"/api/live/{st1['id']}/like", headers=ltok[3]).json()
+    check("live: лайк стрима", lk1.get("likes") == 1, lk1)
+    time.sleep(0.2)
+    lk2 = c.post(f"/api/live/{st1['id']}/like", headers=ltok[3]).json()
+    check("live: второй лайк", lk2.get("likes") == 2, lk2)
+    live_likes = c.get("/api/live", headers=ltok[3]).json()["items"]
+    likes_map = {x["id"]: x.get("likes") for x in live_likes}
+    check("live: счётчик лайков в списке", likes_map.get(st1["id"]) == 2, live_likes)
     act_l = [x for x in c.get("/api/chats", headers=ltok[3]).json()["items"]
              if x["type"] == "activity"][0]
     tlive = [m["text"] for m in c.get(f"/api/chats/{act_l['id']}/messages",

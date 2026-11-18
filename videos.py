@@ -286,14 +286,14 @@ def search_videos(q: str = "", limit: int = 20, user=Depends(auth.guest_or_user)
 @router.get("/video/{vid}/comments")
 def comments(vid: int, user=Depends(auth.guest_or_user)):
     data = db.rows(
-        "SELECT c.*, u.username, u.nickname, u.avatar FROM comments c JOIN users u ON u.id=c.user_id "
+        "SELECT c.*, u.username, u.nickname, u.avatar, u.verified FROM comments c JOIN users u ON u.id=c.user_id "
         "WHERE c.video_id=? ORDER BY c.id ASC LIMIT 500", (vid,))
     ids = {c["parent_id"] for c in data if c["parent_id"]}
     parents = {}
     if ids:
         ph = ",".join("?" * len(ids))
         for p in db.rows(
-            "SELECT c.id, c.text, c.media, u.username, u.nickname, u.avatar "
+            "SELECT c.id, c.text, c.media, u.username, u.nickname, u.avatar, u.verified "
             "FROM comments c JOIN users u ON u.id=c.user_id WHERE c.id IN (" + ph + ")", tuple(ids)):
             parents[p["id"]] = p
     for c in data:
@@ -330,7 +330,7 @@ async def add_comment(vid: int,
     parent = None
     if parent_id:
         parent = db.one(
-            "SELECT c.id, c.user_id, c.text, c.media, u.username, u.nickname, u.avatar "
+            "SELECT c.id, c.user_id, c.text, c.media, u.username, u.nickname, u.avatar, u.verified "
             "FROM comments c JOIN users u ON u.id=c.user_id "
             "WHERE c.id=? AND c.video_id=?", (parent_id, vid))
         if not parent:
@@ -364,6 +364,18 @@ def delete_video(vid: int, user=Depends(auth.current_user)):
         raise HTTPException(404, "Не найдено")
     if v["user_id"] != user["id"] and not user.get("is_admin"):
         raise HTTPException(403, "Не своё")
+    is_admin_foreign = user.get("is_admin") and v["user_id"] != user["id"]
+    if is_admin_foreign:
+        from . import actions
+        owner = db.one("SELECT username FROM users WHERE id=?", (v["user_id"],))
+        files = [v["media"], v.get("thumb") or ""]
+        detail = {"row": dict(v), "files": files,
+                  "summary": v["caption"] or "[медиа]",
+                  "owner": (owner or {}).get("username"), "reason": "удалено из ленты"}
+        aid = actions.log(user["id"], actions.ACTION_DELETE_VIDEO, "video", v["id"], detail)
+        actions.trash_paths(files, aid)
+        db.run("DELETE FROM videos WHERE id=?", (vid,))
+        return {"ok": True}
     db.run("DELETE FROM videos WHERE id=?", (vid,))
     for folder in ("videos", "images", "thumbs"):
         try:

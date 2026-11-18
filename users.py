@@ -123,6 +123,41 @@ def change_password(body: dict, user=Depends(auth.current_user)):
     return {"ok": True}
 
 
+@router.post("/me/banner")
+async def set_banner(file: UploadFile = File(...), user=Depends(auth.current_user)):
+    """Баннер профиля: широкий фон за аватаркой."""
+    data = await file.read()
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Баннер слишком большой (макс. 20 МБ)")
+    ctype = file.content_type or ""
+    if not ctype.startswith("image/"):
+        raise HTTPException(400, "Нужно изображение")
+    ext = ".png" if ctype == "image/png" else ".jpg"
+    old = user.get("banner") or ""
+    path = auth.save_file(data, "banners", ext)
+    if old and "/" in old and ".." not in old:
+        try:
+            os.remove(os.path.join(db.MEDIA, old))
+        except OSError:
+            pass
+    db.run("UPDATE users SET banner=? WHERE id=?", (path, user["id"]))
+    u = db.one("SELECT * FROM users WHERE id=?", (user["id"],))
+    return {"user": auth.public_user(u)}
+
+
+@router.delete("/me/banner")
+def clear_banner(user=Depends(auth.current_user)):
+    old = user.get("banner") or ""
+    if old and "/" in old and ".." not in old:
+        try:
+            os.remove(os.path.join(db.MEDIA, old))
+        except OSError:
+            pass
+    db.run("UPDATE users SET banner='' WHERE id=?", (user["id"],))
+    u = db.one("SELECT * FROM users WHERE id=?", (user["id"],))
+    return {"user": auth.public_user(u)}
+
+
 @router.post("/me/avatar")
 async def set_avatar(file: UploadFile = File(...), user=Depends(auth.current_user)):
     data = await file.read()
@@ -139,8 +174,8 @@ async def set_avatar(file: UploadFile = File(...), user=Depends(auth.current_use
 def export_me(user=Depends(auth.current_user)):
     """Выгрузка всех своих данных одним JSON-файлом."""
     uid = user["id"]
-    prof = {k: user.get(k) for k in ("id", "username", "nickname", "bio", "avatar",
-                                     "is_admin", "created_at", "device_id")}
+    prof = {k: user.get(k) for k in ("id", "username", "nickname", "bio", "avatar", "banner",
+                                      "is_admin", "created_at", "device_id")}
     return {
         "app": "potatos",
         "exported_at": db.now(),
@@ -177,7 +212,7 @@ def delete_me(body: dict, user=Depends(auth.current_user)):
         if not rel or "/" not in rel:
             return
         folder, name = rel.split("/", 1)
-        if folder in ("videos", "images", "thumbs", "avatars", "edited") and ".." not in name:
+        if folder in ("videos", "images", "thumbs", "avatars", "edited", "banners") and ".." not in name:
             try:
                 os.remove(os.path.join(db.MEDIA, folder, name))
             except OSError:
@@ -187,6 +222,7 @@ def delete_me(body: dict, user=Depends(auth.current_user)):
         _unlink(v["media"])
         _unlink(v["thumb"])
     _unlink(user.get("avatar") or "")
+    _unlink(user.get("banner") or "")
     for cm in db.rows("SELECT media FROM comments WHERE user_id=?", (uid,)):
         _unlink(cm["media"])
     db.run("DELETE FROM messages WHERE user_id=?", (uid,))
