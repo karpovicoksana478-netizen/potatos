@@ -89,6 +89,7 @@ Live.list = async function (host, tab) {
 };
 
 function startStreamFlow() {
+  const canScreen = !!(navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function');
   const m = sheet('🔴 Новый эфир', `
     <label class="lbl" style="margin-top:0">Название эфира</label>
     <input class="field" data-title maxlength="80" placeholder="Например: болтаем про картошку">
@@ -98,8 +99,9 @@ function startStreamFlow() {
     </div>
     <div class="live-src">
       <button class="btn danger" data-cam>📷 Эфир с камеры</button>
-      <button class="btn ghost" data-screen>🖥 Запись экрана</button>
-    </div>`);
+      ${canScreen ? '<button class="btn ghost" data-screen>🖥 Запись экрана (только ПК)</button>' : ''}
+    </div>
+    ${canScreen ? '' : '<div class="inline-note" style="margin-top:8px;font-size:12px">🖥 Запись экрана доступна только на компьютере (браузер телефона не поддерживает эту функцию).</div>'}`);
   const input = $('[data-title]', m);
   input.focus();
 
@@ -134,7 +136,7 @@ function startStreamFlow() {
     }
   }
   $('[data-cam]', m).onclick = () => startLive('camera');
-  $('[data-screen]', m).onclick = () => startLive('screen');
+  const screenBtn = $('[data-screen]', m); screenBtn && (screenBtn.onclick = () => startLive('screen'));
   input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); startLive('camera'); } };
 }
 window.startStreamFlow = startStreamFlow;
