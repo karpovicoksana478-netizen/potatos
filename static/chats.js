@@ -265,7 +265,7 @@ function msgHTML(m, prev) {
   let inner = '';
   if (m.kind === 'sticker') inner = `<div class="sticker">${esc(m.text)}</div>`;
   else if (m.kind === 'photo') inner = `<img src="/media/${esc(m.media)}" loading="lazy" onclick="event.stopPropagation()">`;
-  else if (m.kind === 'video') inner = `<video src="/media/${esc(m.media)}" controls playsinline preload="metadata"></video>`;
+  else if (m.kind === 'video') inner = `<video src="/media/${esc(m.media)}" controls playsinline preload="none"></video>`;
   else inner = `<div class="tx">${linkify(esc(m.text))}</div>`;
 
   const showWho = !mine && m.author && m.author.username

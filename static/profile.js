@@ -19,7 +19,7 @@ function videoGrid(items, emptyText) {
     const inner = img
       ? `<img src="${img}" loading="lazy" alt="">`
       : (v.kind === 'photo' ? `<img src="/media/${esc(v.media)}" loading="lazy">`
-        : `<video src="/media/${esc(v.media)}" preload="metadata" muted></video>`);
+        : `<video src="/media/${esc(v.media)}" preload="none" muted></video>`);
     return `<div class="gcell" data-i="${i}">
       ${inner}
       ${v.kind === 'live' ? '<span class="lp">LIVE</span>' : ''}

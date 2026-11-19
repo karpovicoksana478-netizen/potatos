@@ -699,3 +699,14 @@ html[data-theme=light] .badge.ban{background:rgba(220,40,70,.12);color:#c82333}
 
 /* ---------- микрофон в эфире ---------- */
 .mic-toggle{font-size:18px}
+
+/* ---------- журнал действий: сворачиваемый блок со своим скроллом ---------- */
+.actions-toggle{display:flex;width:100%;align-items:center;justify-content:space-between;
+  background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+  padding:11px 14px;color:var(--text);font-size:14px;font-weight:700;cursor:pointer;text-align:left;
+  transition:.15s;margin-bottom:2px}
+.actions-toggle.open{border-color:var(--accent);color:var(--accent-d)}
+.actions-toggle:active{transform:scale(.99)}
+.actions-arrow{font-size:16px;color:var(--muted)}
+.actions-toggle.open .actions-arrow{color:var(--accent-d)}
+[data-actions]{max-height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}

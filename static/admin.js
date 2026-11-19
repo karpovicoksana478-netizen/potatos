@@ -67,11 +67,11 @@ views.admin = async function (screen) {
       </div>
       <div data-vres style="margin-top:10px"></div>` : ''}
       <div class="divider"></div>
-      <div class="spread" style="margin-bottom:10px">
-        <label class="lbl" style="margin:0">Журнал действий</label>
-        <button class="btn sm ghost" data-refresh>↻ Обновить</button>
-      </div>
-      <div data-actions><div class="loader"><div class="spin"></div></div></div>
+      <button class="actions-toggle" data-acttoggle>
+        <span>Журнал действий<span data-acount class="muted" style="font-weight:400"></span></span>
+        <span class="actions-arrow" data-arrow>▾</span>
+      </button>
+      <div data-actions style="margin-top:10px"></div>
       <div class="divider"></div>
       <div class="spread" style="margin-bottom:10px">
         <label class="lbl" style="margin:0">Жалобы<span data-opencount></span></label>
@@ -163,14 +163,26 @@ views.admin = async function (screen) {
     vq.onkeydown = e => { if (e.key === 'Enter') findByUsername(vq.value, vres, renderV); };
   }
 
-  /* ---------- журнал действий модерации ---------- */
+  /* ---------- журнал действий модерации (сворачиваемый, внутри свой скролл) ---------- */
   const actionsBox = $('[data-actions]', screen);
+  const actionsToggle = $('[data-acttoggle]', screen);
+  const arrow = $('[data-arrow]', screen);
+  const acount = $('[data-acount]', screen);
+  let actionsOpen = false;
+  const paintCollapse = () => {
+    actionsBox.style.display = actionsOpen ? '' : 'none';
+    if (arrow) arrow.textContent = actionsOpen ? '▴' : '▾';
+    actionsToggle.classList.toggle('open', actionsOpen);
+  };
+  actionsToggle.onclick = () => { actionsOpen = !actionsOpen; paintCollapse(); };
+  paintCollapse();
   const paintActions = async () => {
     let d;
     try { d = await api('/api/admin/actions?limit=40', { silent: true }); } catch (e) {
       actionsBox.innerHTML = '<div class="inline-note">Не удалось загрузить журнал</div>';
       return;
     }
+    if (acount) acount.textContent = d.items.length ? ` · ${d.items.length}` : '';
     if (!d.items.length) {
       actionsBox.innerHTML = '<div class="inline-note">Действий модерации ещё не было</div>';
       return;
@@ -203,7 +215,6 @@ views.admin = async function (screen) {
       }, 'Насовсем'));
     });
   };
-  $('[data-refresh]', screen).onclick = () => { paintActions(); };
 
   /* ---------- статистика ---------- */
   api('/api/admin/stats', { silent: true }).then(d => {
@@ -252,6 +263,7 @@ views.admin = async function (screen) {
         </div>`}
       </div>`;
     }).join('');
+    paintCollapse();
     $$('.rep-row', box).forEach(row => {
       const id = +row.dataset.id;
       const del = $('[data-del]', row);

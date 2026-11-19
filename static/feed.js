@@ -298,7 +298,7 @@ function createFeed(root, opts = {}) {
     const mediaHTML = isPhoto
       ? `<img class="media" src="/media/${esc(v.media)}" loading="${i < 2 ? 'eager' : 'lazy'}" alt="">`
       : `<video class="media" src="/media/${esc(v.media)}" ${v.thumb ? `poster="/media/${esc(v.thumb)}"` : ''}
-           loop playsinline preload="${i < 2 ? 'auto' : 'metadata'}" muted></video>`;
+           loop playsinline preload="none" muted></video>`;
     const followUI = (v.mine || !App.me) ? '' :
       (v.followed
         ? `<button class="follow done" data-follow title="Вы подписаны">✓</button>`
