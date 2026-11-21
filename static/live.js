@@ -1,7 +1,8 @@
 /* potatos — прямые эфиры: WebRTC mesh + чат
-   Камера — 720p@30, съёмка экрана — до 1080p@30. Целевое качество зависит
-   от числа зрителей, но стартуем на ступень скромнее и по статистике WebRTC
-   (CPU/потери) понижаем профиль, чтобы не было лагов. Звук — моно 64 кбит/с. */
+   На ПК камера 720p@30, экран до 720p@30; на телефоне захват 540p@24 и потолок
+   качества 480p. Качество отправки зависит от числа зрителей, стартует на ступень
+   скромнее и по статистике WebRTC (CPU/потери) понижается, чтобы не было лагов.
+   Звук — моно 64 кбит/с. */
 const RTC_CONFIG = {
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
@@ -26,8 +27,37 @@ function liveProfileIndex(viewers) {
 function liveProfile(viewers) {
   return LIVE_PROFILES[liveProfileIndex(viewers)];
 }
+
+/* Телефон: кодировщик слабее и греется, поэтому выше 480p не лезем
+   и автоснижение срабатывает с первого тревожного замера. */
+const IS_MOBILE = (() => {
+  try {
+    const ua = navigator.userAgent || '';
+    return /Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(ua);
+  } catch (e) { return false; }
+})();
+const MOBILE_MIN_LEVEL = 1;                       // телефон не поднимается выше 540p
+const MOBILE_CAPTURE = {
+  width: { ideal: 960, max: 1280 },
+  height: { ideal: 540, max: 720 },
+  frameRate: { ideal: 24, max: 30 },
+};
+function minLevel() {
+  return IS_MOBILE ? MOBILE_MIN_LEVEL : 0;
+}
+function maxLevel() {
+  return LIVE_PROFILES.length - 1;
+}
+function cameraConstraints() {
+  const base = IS_MOBILE ? MOBILE_CAPTURE : {
+    width: { ideal: 1280, max: 1280 },
+    height: { ideal: 720, max: 720 },
+    frameRate: { ideal: 30, max: 30 },
+  };
+  return { facingMode: 'user', ...base };
+}
 function startProfileIndex(viewers) {
-  return Math.min(LIVE_PROFILES.length - 1, liveProfileIndex(viewers) + 1);
+  return Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers) + 1));
 }
 
 const Live = {
@@ -135,12 +165,13 @@ function startStreamFlow() {
     try {
       if (mode === 'screen') {
         stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
+          // max, а не ideal: Chrome иначе может отдать весь монитор (2K/4K)
+          video: { width: { max: 1280 }, height: { max: 720 }, frameRate: { ideal: 30, max: 30 } },
           audio: true,
         });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
+          video: cameraConstraints(),
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
         });
       }
@@ -168,7 +199,7 @@ window.startStreamFlow = startStreamFlow;
 
 /* ---------------- качество отправки (адаптивное) ---------------- */
 function applyLiveQuality(pc, viewers, level) {
-  const idx = Math.max(0, Math.min(LIVE_PROFILES.length - 1,
+  const idx = Math.max(minLevel(), Math.min(maxLevel(),
     level == null ? startProfileIndex(viewers) : level));
   const prof = LIVE_PROFILES[idx];
   const screen = !!(Live.room && Live.room.mode === 'screen');
@@ -202,7 +233,7 @@ function currentQualityLabel() {
   const level = pcs.length
     ? Math.max(...pcs.map(pc => pc.qLevel || 0))
     : startProfileIndex(Live.room ? Live.room.viewers || 0 : 0);
-  return LIVE_PROFILES[Math.max(0, Math.min(LIVE_PROFILES.length - 1, level))].label;
+  return LIVE_PROFILES[Math.max(minLevel(), Math.min(maxLevel(), level))].label;
 }
 
 function updateLiveQualityLabel() {
@@ -211,7 +242,7 @@ function updateLiveQualityLabel() {
 }
 
 function retuneLiveQuality(viewers) {
-  const target = liveProfileIndex(viewers);
+  const target = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers)));
   Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => {
     if (pc.qLevel == null) pc.qLevel = startProfileIndex(viewers);
     if (pc.qLevel < target) pc.qLevel = target;   // зрителей стало больше — не перегружаем стримера
@@ -241,12 +272,24 @@ async function monitorLivePc(pc) {
   const reason = video.qualityLimitationReason || 'none';
   const dropRatio = dDrop / dEnc;
   const limited = reason === 'cpu' || dropRatio > 0.08 || (reason === 'bandwidth' && dropRatio > 0.02);
+  const need = IS_MOBILE ? 1 : 2;   // на телефоне ждать второго замера дорого
   pc.qLimited = limited ? (pc.qLimited || 0) + 1 : 0;
-  if (pc.qLimited >= 2 && pc.qLevel < LIVE_PROFILES.length - 1) {
+  if (pc.qLimited >= need && pc.qLevel < maxLevel()) {
     pc.qLimited = 0;
     pc.qLevel += 1;
     applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
     updateLiveQualityLabel();
+  } else if (!limited && pc.qLevel > startProfileIndex(Live.room ? Live.room.viewers || 0 : 0)) {
+    pc.qClean = (pc.qClean || 0) + 1;
+    // сеть стабильна долго — можно вернуть одну ступень (но не выше потолка)
+    if (pc.qClean >= 15) {
+      pc.qClean = 0;
+      pc.qLevel = Math.max(minLevel(), pc.qLevel - 1);
+      applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
+      updateLiveQualityLabel();
+    }
+  } else {
+    pc.qClean = 0;
   }
 }
 
@@ -375,7 +418,7 @@ async function renderRoom(screen, sid) {
     } else {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
+          video: cameraConstraints(),
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
         });
       } catch (e) {
@@ -386,6 +429,15 @@ async function renderRoom(screen, sid) {
       }
     }
     Live.room.mode = Live.room.mode || 'camera';
+    const vtrack = stream.getVideoTracks()[0];
+    // жёстко ограничиваем захват экрана, если браузер всё же отдал больше
+    if (Live.room.mode === 'screen' && vtrack) {
+      vtrack.applyConstraints({ width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 30 } }).catch(() => { });
+    }
+    // подсказка кодировщику: текст на экране или плавное движение с камеры
+    if (vtrack && 'contentHint' in vtrack) {
+      try { vtrack.contentHint = Live.room.mode === 'screen' ? 'text' : 'motion'; } catch (e) { }
+    }
     // если аудио ещё нет (экран без системного звука) — просим доступ к микрофону отдельно
     if (!stream.getAudioTracks().length) {
       try {
@@ -465,6 +517,11 @@ async function renderRoom(screen, sid) {
     // зритель ничего не отправляет, но добавляем recvonly-трансиверы
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
+    // буфер воспроизведения: на мобильной сети без него картинка рвётся
+    const jitter = IS_MOBILE ? 400 : 200;
+    pc.getReceivers().forEach(r => {
+      try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
+    });
     liveSend({ type: 'live-join', sid });
     // fallback: если поток не появился за 15 сек — сообщим
     setTimeout(() => { if (!video.srcObject && !Live.room.leaving) wait.textContent = 'Ожидаем стрим… (проверьте, идёт ли эфир)'; }, 15000);
@@ -475,6 +532,10 @@ async function renderRoom(screen, sid) {
     const pc = Live.room.remotePc;
     if (!pc) return;
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    const jitter = IS_MOBILE ? 400 : 200;
+    pc.getReceivers().forEach(r => {
+      try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
+    });
     await flushLiveIce(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
