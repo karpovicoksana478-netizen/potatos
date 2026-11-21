@@ -1,10 +1,25 @@
 /* potatos — прямые эфиры: WebRTC mesh + чат
-   Трафик держим низким: 360p@12fps, ~300 кбит/с видео, моно-звук ~32 кбит/с. */
+   Камера — 720p@30, съёмка экрана — до 1080p@30 (оба режима — 30 fps).
+   Зрителям отдаётся адаптивно: до 3 — 720p@30 ~2.5 Мбит/с (экран ×1.3),
+   до 8 — 540p@24 ~1.5 Мбит/с, дальше — 480p@20 ~0.9 Мбит/с. Звук — моно 64 кбит/с. */
 const RTC_CONFIG = {
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
   ],
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
 };
+
+/* Профили качества по числу зрителей. Чем их больше, тем меньше кодирований
+   приходится делать телефону-стримеру (у каждого зрителя свой RTCPeerConnection). */
+const LIVE_PROFILES = [
+  { upTo: 3, label: 'HD 30', height: 720, fps: 30, videoBitrate: 2500000, audioBitrate: 64000 },
+  { upTo: 8, label: 'HD 24', height: 540, fps: 24, videoBitrate: 1500000, audioBitrate: 64000 },
+  { upTo: Infinity, label: 'SD 20', height: 480, fps: 20, videoBitrate: 900000, audioBitrate: 48000 },
+];
+function liveProfile(viewers) {
+  return LIVE_PROFILES.find(p => viewers <= p.upTo) || LIVE_PROFILES[LIVE_PROFILES.length - 1];
+}
 
 const Live = {
   room: null,        // { sid, isBroadcaster, localStream, pcs: {uid: pc}, remotePc, leaving }
@@ -111,12 +126,12 @@ function startStreamFlow() {
     try {
       if (mode === 'screen') {
         stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15 } },
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
           audio: true,
         });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 12, max: 15 }, facingMode: 'user' },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
         });
       }
@@ -133,6 +148,7 @@ function startStreamFlow() {
     } catch (e) {
       stream.getTracks().forEach(t => t.stop());
       Live.pendingStream = null;
+      Live.pendingMode = null;
     }
   }
   $('[data-cam]', m).onclick = () => startLive('camera');
@@ -141,19 +157,47 @@ function startStreamFlow() {
 }
 window.startStreamFlow = startStreamFlow;
 
-/* ---------------- низкозатратная настройка трека ---------------- */
-function lowBandwidth(pc) {
+/* ---------------- качество отправки (зависит от числа зрителей) ---------------- */
+function applyLiveQuality(pc, viewers) {
+  const prof = liveProfile(viewers);
+  const screen = !!(Live.room && Live.room.mode === 'screen');
+  // текст на экране требует больше бит, чем камера
+  const videoBitrate = Math.round(prof.videoBitrate * (screen ? 1.3 : 1));
+  const track = pc.getSenders().map(s => s.track).find(t => t && t.kind === 'video');
+  const srcH = (track && track.getSettings && track.getSettings().height) || 720;
+  const scale = Math.max(1, srcH / prof.height);  // даунскейл, если источник больше
   pc.getSenders().forEach(s => {
     if (!s.track) return;
     const p = s.getParameters();
     if (s.track.kind === 'video') {
-      p.encodings = [{ maxBitrate: 300000, maxFramerate: 12 }];
+      p.encodings = [{
+        maxBitrate: videoBitrate,
+        maxFramerate: prof.fps,
+        scaleResolutionDownBy: scale,
+        priority: 'high',
+      }];
+      // при нехватке ресурсов уменьшаем кадр, но сохраняем плавность
       p.degradationPreference = 'maintain-framerate';
     } else if (s.track.kind === 'audio') {
-      p.encodings = [{ maxBitrate: 32000 }];
+      p.encodings = [{ maxBitrate: prof.audioBitrate, priority: 'high' }];
     }
     s.setParameters(p).catch(() => { });
   });
+  return prof;
+}
+
+function retuneLiveQuality(viewers) {
+  Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => applyLiveQuality(pc, viewers));
+  return liveProfile(viewers);
+}
+
+/* ICE-кандидаты могут прийти раньше remoteDescription — копим и применяем позже */
+async function flushLiveIce(pc) {
+  const list = pc.pendingIce || [];
+  pc.pendingIce = [];
+  for (const cand of list) {
+    try { await pc.addIceCandidate(cand); } catch (e) { }
+  }
 }
 
 /* ---------------- комната эфира ---------------- */
@@ -166,7 +210,8 @@ async function renderRoom(screen, sid) {
 
   const me = App.me;
   const isBroadcaster = me && info.user && me.id === info.user.id;
-  Live.room = { sid, isBroadcaster, pcs: {}, localStream: null, remotePc: null, leaving: false };
+  Live.room = { sid, isBroadcaster, pcs: {}, localStream: null, remotePc: null,
+                leaving: false, viewers: info.viewers || 0 };
 
   screen.innerHTML = `
   <div class="live-room">
@@ -174,7 +219,7 @@ async function renderRoom(screen, sid) {
       <button class="back" data-back>←</button>
       <div class="live-head-t">
         <div class="live-head-title">${esc(info.title)}</div>
-        <div class="live-head-sub"><span class="live-badge">● LIVE</span> 👁 <span data-viewers>${nfmt(info.viewers)}</span> · ❤ <span data-likes>${nfmt(info.likes || 0)}</span> · @${esc(info.user.username)}</div>
+        <div class="live-head-sub"><span class="live-badge">● LIVE</span> <span data-quality>${liveProfile(info.viewers || 0).label}</span> · 👁 <span data-viewers>${nfmt(info.viewers)}</span> · ❤ <span data-likes>${nfmt(info.likes || 0)}</span> · @${esc(info.user.username)}</div>
       </div>
       ${isBroadcaster ? '<button class="back mic-toggle" data-mic title="Выключить микрофон">🎤</button><button class="btn sm danger" data-end>■ Завершить</button>' : ''}
     </div>
@@ -264,11 +309,13 @@ async function renderRoom(screen, sid) {
     let stream;
     if (Live.pendingStream) {
       stream = Live.pendingStream;
+      Live.room.mode = Live.pendingMode || 'camera';
       Live.pendingStream = null;
+      Live.pendingMode = null;
     } else {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 12, max: 15 }, facingMode: 'user' },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 } },
         });
       } catch (e) {
@@ -278,6 +325,7 @@ async function renderRoom(screen, sid) {
         return;
       }
     }
+    Live.room.mode = Live.room.mode || 'camera';
     // если аудио ещё нет (экран без системного звука) — просим доступ к микрофону отдельно
     if (!stream.getAudioTracks().length) {
       try {
@@ -304,14 +352,28 @@ async function renderRoom(screen, sid) {
   // offer создаётся для каждого зрителя, когда сервер скажет «он в комнате»
   async function offerTo(viewerId) {
     const pc = new RTCPeerConnection(RTC_CONFIG);
+    pc.pendingIce = [];
     Live.room.pcs[viewerId] = pc;
     Live.room.localStream.getTracks().forEach(t => pc.addTrack(t, Live.room.localStream));
-    lowBandwidth(pc);
+    applyLiveQuality(pc, Live.room.viewers || 0);
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: viewerId, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-        try { pc.close(); } catch (e) { }
-        delete Live.room.pcs[viewerId];
+      const st = pc.connectionState;
+      if (st === 'connected') { clearTimeout(pc.downTimer); pc.downTimer = null; pc.retried = false; return; }
+      if (st === 'closed') { delete Live.room.pcs[viewerId]; return; }
+      if (st === 'failed' || st === 'disconnected') {
+        if (pc.downTimer) return;
+        pc.downTimer = setTimeout(() => {
+          pc.downTimer = null;
+          if (pc.connectionState === 'connected') return;
+          if (!pc.retried) {                       // первая попытка — пересобираем ICE
+            pc.retried = true;
+            try { pc.restartIce(); } catch (e) { }
+            return;
+          }
+          try { pc.close(); } catch (e) { }        // не помогло — убираем мёртвого зрителя
+          delete Live.room.pcs[viewerId];
+        }, st === 'failed' ? 1500 : 6000);
       }
     };
     const offer = await pc.createOffer();
@@ -322,8 +384,13 @@ async function renderRoom(screen, sid) {
   // --- зритель ---
   async function setupViewer() {
     const pc = new RTCPeerConnection(RTC_CONFIG);
+    pc.pendingIce = [];
     Live.room.remotePc = pc;
-    pc.ontrack = e => { video.srcObject = e.streams[0]; wait.hidden = true; };
+    pc.ontrack = e => {
+      video.srcObject = e.streams[0];
+      wait.hidden = true;
+      video.play().catch(() => { });   // авто.play с звуком иногда блокируется
+    };
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: info.user.id, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') {
@@ -343,24 +410,45 @@ async function renderRoom(screen, sid) {
     const pc = Live.room.remotePc;
     if (!pc) return;
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await flushLiveIce(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     liveSend({ type: 'live-answer', sid, to: from, sdp: pc.localDescription });
   };
   Live.room.onAnswer = async (from, sdp) => {
     const pc = Live.room.pcs[from];
-    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    if (pc) {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await flushLiveIce(pc);
+    }
   };
   Live.room.onIce = async (from, cand) => {
     const pc = Live.room.pcs[from] || Live.room.remotePc;
-    if (pc) { try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e) { } }
+    if (!pc) return;
+    try {
+      if (!pc.remoteDescription) {
+        (pc.pendingIce || (pc.pendingIce = [])).push(new RTCIceCandidate(cand));
+        return;
+      }
+      await pc.addIceCandidate(new RTCIceCandidate(cand));
+    } catch (e) { }
   };
   Live.room.onPeer = from => { offerTo(from).catch(e => console.error(e)); };
   Live.room.onPeerLeft = from => {
     const pc = Live.room.pcs[from];
-    if (pc) { try { pc.close(); } catch (e) { } delete Live.room.pcs[from]; }
+    if (pc) {
+      clearTimeout(pc.downTimer);
+      try { pc.close(); } catch (e) { }
+      delete Live.room.pcs[from];
+    }
   };
-  Live.room.onViewers = n => { const el = $('[data-viewers]', screen); if (el) el.textContent = nfmt(n); };
+  Live.room.onViewers = n => {
+    Live.room.viewers = n;
+    const el = $('[data-viewers]', screen);
+    if (el) el.textContent = nfmt(n);
+    const q = $('[data-quality]', screen);
+    if (q) q.textContent = retuneLiveQuality(n).label;
+  };
   Live.room.onEnd = () => {
     toast('Эфир завершён');
     cleanupRoom();
@@ -386,7 +474,10 @@ function cleanupRoom() {
   if (!r) return;
   r.leaving = true;
   try { liveSend({ type: 'live-leave', sid: r.sid }); } catch (e) { }
-  Object.values(r.pcs || {}).forEach(pc => { try { pc.close(); } catch (e) { } });
+  Object.values(r.pcs || {}).forEach(pc => {
+    clearTimeout(pc.downTimer);
+    try { pc.close(); } catch (e) { }
+  });
   if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
   if (r.localStream) r.localStream.getTracks().forEach(t => t.stop());
   Live.room = null;

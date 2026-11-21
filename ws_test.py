@@ -20,8 +20,8 @@ def main():
         pass
     s = str(random.randint(10000, 99999))
     c = httpx.Client(base_url=BASE, timeout=30)
-    a = c.post("/api/register", json={"nickname": "A", "username": "ws_a" + s, "password": "1234"}).json()
-    b = c.post("/api/register", json={"nickname": "B", "username": "ws_b" + s, "password": "1234"}).json()
+    a = c.post("/api/register", json={"nickname": "A", "username": "ws_a" + s, "password": "123456"}).json()
+    b = c.post("/api/register", json={"nickname": "B", "username": "ws_b" + s, "password": "123456"}).json()
     ha = {"Authorization": "Bearer " + a["token"]}
     dm = c.post("/api/chats/dm", headers=ha, json={"username": "ws_b" + s}).json()
 
