@@ -1,7 +1,7 @@
 /* potatos — прямые эфиры: WebRTC mesh + чат
-   Камера — 720p@30, съёмка экрана — до 1080p@30 (оба режима — 30 fps).
-   Зрителям отдаётся адаптивно: до 3 — 720p@30 ~2.5 Мбит/с (экран ×1.3),
-   до 8 — 540p@24 ~1.5 Мбит/с, дальше — 480p@20 ~0.9 Мбит/с. Звук — моно 64 кбит/с. */
+   Камера — 720p@30, съёмка экрана — до 1080p@30. Целевое качество зависит
+   от числа зрителей, но стартуем на ступень скромнее и по статистике WebRTC
+   (CPU/потери) понижаем профиль, чтобы не было лагов. Звук — моно 64 кбит/с. */
 const RTC_CONFIG = {
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
@@ -10,15 +10,24 @@ const RTC_CONFIG = {
   rtcpMuxPolicy: 'require',
 };
 
-/* Профили качества по числу зрителей. Чем их больше, тем меньше кодирований
-   приходится делать телефону-стримеру (у каждого зрителя свой RTCPeerConnection). */
+/* Профили качества по числу зрителей. Чем их больше, тем меньше нагрузка
+   на кодировщик стримера (у каждого зрителя свой RTCPeerConnection).
+   Старт — на ступень скромнее целевой, дальше по статистике только понижаем. */
 const LIVE_PROFILES = [
   { upTo: 3, label: 'HD 30', height: 720, fps: 30, videoBitrate: 2500000, audioBitrate: 64000 },
   { upTo: 8, label: 'HD 24', height: 540, fps: 24, videoBitrate: 1500000, audioBitrate: 64000 },
-  { upTo: Infinity, label: 'SD 20', height: 480, fps: 20, videoBitrate: 900000, audioBitrate: 48000 },
+  { upTo: 20, label: 'SD 20', height: 480, fps: 20, videoBitrate: 900000, audioBitrate: 48000 },
+  { upTo: Infinity, label: 'LD 15', height: 360, fps: 15, videoBitrate: 500000, audioBitrate: 48000 },
 ];
+function liveProfileIndex(viewers) {
+  const i = LIVE_PROFILES.findIndex(p => viewers <= p.upTo);
+  return i === -1 ? LIVE_PROFILES.length - 1 : i;
+}
 function liveProfile(viewers) {
-  return LIVE_PROFILES.find(p => viewers <= p.upTo) || LIVE_PROFILES[LIVE_PROFILES.length - 1];
+  return LIVE_PROFILES[liveProfileIndex(viewers)];
+}
+function startProfileIndex(viewers) {
+  return Math.min(LIVE_PROFILES.length - 1, liveProfileIndex(viewers) + 1);
 }
 
 const Live = {
@@ -157,12 +166,14 @@ function startStreamFlow() {
 }
 window.startStreamFlow = startStreamFlow;
 
-/* ---------------- качество отправки (зависит от числа зрителей) ---------------- */
-function applyLiveQuality(pc, viewers) {
-  const prof = liveProfile(viewers);
+/* ---------------- качество отправки (адаптивное) ---------------- */
+function applyLiveQuality(pc, viewers, level) {
+  const idx = Math.max(0, Math.min(LIVE_PROFILES.length - 1,
+    level == null ? startProfileIndex(viewers) : level));
+  const prof = LIVE_PROFILES[idx];
   const screen = !!(Live.room && Live.room.mode === 'screen');
   // текст на экране требует больше бит, чем камера
-  const videoBitrate = Math.round(prof.videoBitrate * (screen ? 1.3 : 1));
+  const videoBitrate = Math.round(prof.videoBitrate * (screen ? 1.25 : 1));
   const track = pc.getSenders().map(s => s.track).find(t => t && t.kind === 'video');
   const srcH = (track && track.getSettings && track.getSettings().height) || 720;
   const scale = Math.max(1, srcH / prof.height);  // даунскейл, если источник больше
@@ -186,9 +197,57 @@ function applyLiveQuality(pc, viewers) {
   return prof;
 }
 
+function currentQualityLabel() {
+  const pcs = Object.values((Live.room && Live.room.pcs) || {});
+  const level = pcs.length
+    ? Math.max(...pcs.map(pc => pc.qLevel || 0))
+    : startProfileIndex(Live.room ? Live.room.viewers || 0 : 0);
+  return LIVE_PROFILES[Math.max(0, Math.min(LIVE_PROFILES.length - 1, level))].label;
+}
+
+function updateLiveQualityLabel() {
+  const el = Live.room && Live.room.qualityEl;
+  if (el) el.textContent = currentQualityLabel();
+}
+
 function retuneLiveQuality(viewers) {
-  Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => applyLiveQuality(pc, viewers));
+  const target = liveProfileIndex(viewers);
+  Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => {
+    if (pc.qLevel == null) pc.qLevel = startProfileIndex(viewers);
+    if (pc.qLevel < target) pc.qLevel = target;   // зрителей стало больше — не перегружаем стримера
+    applyLiveQuality(pc, viewers, pc.qLevel);
+  });
   return liveProfile(viewers);
+}
+
+/* Следим за статистикой кодировщика: если Chrome говорит про CPU/losses —
+   понижаем ступень. Это дешевле, чем держать 720p на слабом телефоне. */
+async function monitorLivePc(pc) {
+  if (!pc || pc.connectionState !== 'connected') return;
+  let stats;
+  try { stats = await pc.getStats(); } catch (e) { return; }
+  let video = null;
+  stats.forEach(s => {
+    if (s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) video = s;
+  });
+  if (!video) return;
+  const prev = pc.qPrev || { encoded: 0, dropped: 0 };
+  const encoded = video.framesEncoded || 0;
+  const dropped = video.framesDropped || 0;
+  const dEnc = encoded - prev.encoded;
+  const dDrop = dropped - prev.dropped;
+  pc.qPrev = { encoded, dropped };
+  if (dEnc <= 0) return;
+  const reason = video.qualityLimitationReason || 'none';
+  const dropRatio = dDrop / dEnc;
+  const limited = reason === 'cpu' || dropRatio > 0.08 || (reason === 'bandwidth' && dropRatio > 0.02);
+  pc.qLimited = limited ? (pc.qLimited || 0) + 1 : 0;
+  if (pc.qLimited >= 2 && pc.qLevel < LIVE_PROFILES.length - 1) {
+    pc.qLimited = 0;
+    pc.qLevel += 1;
+    applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
+    updateLiveQualityLabel();
+  }
 }
 
 /* ICE-кандидаты могут прийти раньше remoteDescription — копим и применяем позже */
@@ -246,6 +305,7 @@ async function renderRoom(screen, sid) {
   const heartsBox = $('[data-hearts]', screen);
   const likeBtn = $('[data-like]', screen);
   Live.room.likes = info.likes || 0;
+  Live.room.qualityEl = $('[data-quality]', screen);
 
   function paintLikes(n) {
     Live.room.likes = n;
@@ -355,12 +415,16 @@ async function renderRoom(screen, sid) {
     pc.pendingIce = [];
     Live.room.pcs[viewerId] = pc;
     Live.room.localStream.getTracks().forEach(t => pc.addTrack(t, Live.room.localStream));
-    applyLiveQuality(pc, Live.room.viewers || 0);
+    pc.qLevel = startProfileIndex(Live.room.viewers || 0);
+    pc.qLimited = 0;
+    pc.qPrev = null;
+    applyLiveQuality(pc, Live.room.viewers || 0, pc.qLevel);
+    pc.qTimer = setInterval(() => monitorLivePc(pc), 2000);
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: viewerId, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === 'connected') { clearTimeout(pc.downTimer); pc.downTimer = null; pc.retried = false; return; }
-      if (st === 'closed') { delete Live.room.pcs[viewerId]; return; }
+      if (st === 'closed') { clearInterval(pc.qTimer); delete Live.room.pcs[viewerId]; return; }
       if (st === 'failed' || st === 'disconnected') {
         if (pc.downTimer) return;
         pc.downTimer = setTimeout(() => {
@@ -371,6 +435,7 @@ async function renderRoom(screen, sid) {
             try { pc.restartIce(); } catch (e) { }
             return;
           }
+          clearInterval(pc.qTimer);
           try { pc.close(); } catch (e) { }        // не помогло — убираем мёртвого зрителя
           delete Live.room.pcs[viewerId];
         }, st === 'failed' ? 1500 : 6000);
@@ -438,6 +503,7 @@ async function renderRoom(screen, sid) {
     const pc = Live.room.pcs[from];
     if (pc) {
       clearTimeout(pc.downTimer);
+      clearInterval(pc.qTimer);
       try { pc.close(); } catch (e) { }
       delete Live.room.pcs[from];
     }
@@ -446,8 +512,8 @@ async function renderRoom(screen, sid) {
     Live.room.viewers = n;
     const el = $('[data-viewers]', screen);
     if (el) el.textContent = nfmt(n);
-    const q = $('[data-quality]', screen);
-    if (q) q.textContent = retuneLiveQuality(n).label;
+    retuneLiveQuality(n);
+    updateLiveQualityLabel();
   };
   Live.room.onEnd = () => {
     toast('Эфир завершён');
@@ -476,6 +542,7 @@ function cleanupRoom() {
   try { liveSend({ type: 'live-leave', sid: r.sid }); } catch (e) { }
   Object.values(r.pcs || {}).forEach(pc => {
     clearTimeout(pc.downTimer);
+    clearInterval(pc.qTimer);
     try { pc.close(); } catch (e) { }
   });
   if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
