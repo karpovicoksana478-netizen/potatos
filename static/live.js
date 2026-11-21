@@ -2,7 +2,7 @@
    На ПК камера 720p@30, экран до 720p@30; на телефоне захват 540p@24 и потолок
    качества 480p. Качество отправки зависит от числа зрителей, стартует на ступень
    скромнее и по статистике WebRTC (CPU/потери) понижается, чтобы не было лагов.
-   Экран с ПК стартует со лёгкой ступени (SD 20) и не поднимается выше неё —
+   Экран с ПК стартует со лёгкой ступени (HD 24 для малой аудитории) и не поднимается выше неё —
    тяжёлый контент не держит телефоны-зрителей в лаге.
    Звук — моно 64 кбит/с. */
 const RTC_CONFIG = {
@@ -62,9 +62,9 @@ function cameraConstraints() {
 function startProfileIndex(viewers, mode) {
   const idx = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers) + 1));
   if (mode === 'screen') {
-    // экран стартует со лёгкой ступени (SD 20) и не поднимается выше неё —
+    // экран стартует со лёгкой ступени (HD 24 для малой аудитории) и не поднимается выше неё —
     // тяжёлый контент (мультипликация, окна) не грузит телефоны-зрителей
-    const screenStart = Math.max(minLevel(), Math.min(maxLevel(), 2));
+    const screenStart = Math.max(minLevel(), Math.min(maxLevel(), 1));
     return Math.max(screenStart, idx);
   }
   return idx;
