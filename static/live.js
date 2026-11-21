@@ -2,6 +2,8 @@
    На ПК камера 720p@30, экран до 720p@30; на телефоне захват 540p@24 и потолок
    качества 480p. Качество отправки зависит от числа зрителей, стартует на ступень
    скромнее и по статистике WebRTC (CPU/потери) понижается, чтобы не было лагов.
+   Экран с ПК стартует со лёгкой ступени (SD 20) и не поднимается выше неё —
+   тяжёлый контент не держит телефоны-зрителей в лаге.
    Звук — моно 64 кбит/с. */
 const RTC_CONFIG = {
   iceServers: [
@@ -43,6 +45,7 @@ const MOBILE_CAPTURE = {
   frameRate: { ideal: 24, max: 30 },
 };
 function minLevel() {
+  // телефон: кодировщик слабее — не поднимаемся выше HD 24 (540p)
   return IS_MOBILE ? MOBILE_MIN_LEVEL : 0;
 }
 function maxLevel() {
@@ -56,8 +59,15 @@ function cameraConstraints() {
   };
   return { facingMode: 'user', ...base };
 }
-function startProfileIndex(viewers) {
-  return Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers) + 1));
+function startProfileIndex(viewers, mode) {
+  const idx = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers) + 1));
+  if (mode === 'screen') {
+    // экран стартует со лёгкой ступени (SD 20) и не поднимается выше неё —
+    // тяжёлый контент (мультипликация, окна) не грузит телефоны-зрителей
+    const screenStart = Math.max(minLevel(), Math.min(maxLevel(), 2));
+    return Math.max(screenStart, idx);
+  }
+  return idx;
 }
 
 const Live = {
@@ -199,12 +209,13 @@ window.startStreamFlow = startStreamFlow;
 
 /* ---------------- качество отправки (адаптивное) ---------------- */
 function applyLiveQuality(pc, viewers, level) {
+  const mode = (Live.room && Live.room.mode) || 'camera';
   const idx = Math.max(minLevel(), Math.min(maxLevel(),
-    level == null ? startProfileIndex(viewers) : level));
+    level == null ? startProfileIndex(viewers, mode) : level));
   const prof = LIVE_PROFILES[idx];
-  const screen = !!(Live.room && Live.room.mode === 'screen');
-  // текст на экране требует больше бит, чем камера
-  const videoBitrate = Math.round(prof.videoBitrate * (screen ? 1.25 : 1));
+  // тяжёлый экран (мультипликация, окна) кодируем со стартовой мощностью —
+  // не раздут до ×1.25, лишние биты только усиливают лаг на телефонах-зрителях
+  const videoBitrate = prof.videoBitrate;
   const track = pc.getSenders().map(s => s.track).find(t => t && t.kind === 'video');
   const srcH = (track && track.getSettings && track.getSettings().height) || 720;
   const scale = Math.max(1, srcH / prof.height);  // даунскейл, если источник больше
@@ -230,9 +241,10 @@ function applyLiveQuality(pc, viewers, level) {
 
 function currentQualityLabel() {
   const pcs = Object.values((Live.room && Live.room.pcs) || {});
+  const mode = (Live.room && Live.room.mode) || 'camera';
   const level = pcs.length
     ? Math.max(...pcs.map(pc => pc.qLevel || 0))
-    : startProfileIndex(Live.room ? Live.room.viewers || 0 : 0);
+    : startProfileIndex(Live.room ? Live.room.viewers || 0 : 0, mode);
   return LIVE_PROFILES[Math.max(minLevel(), Math.min(maxLevel(), level))].label;
 }
 
@@ -241,11 +253,12 @@ function updateLiveQualityLabel() {
   if (el) el.textContent = currentQualityLabel();
 }
 
-function retuneLiveQuality(viewers) {
+function retuneLiveQuality(viewers, mode) {
   const target = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers)));
   Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => {
-    if (pc.qLevel == null) pc.qLevel = startProfileIndex(viewers);
-    if (pc.qLevel < target) pc.qLevel = target;   // зрителей стало больше — не перегружаем стримера
+    if (pc.qLevel == null) pc.qLevel = startProfileIndex(viewers, mode);
+    // для экрана не поднимаем качество при росте зрителей — тяжёлый контент + рост = нагрузка
+    if (mode !== 'screen' && pc.qLevel < target) pc.qLevel = target;
     applyLiveQuality(pc, viewers, pc.qLevel);
   });
   return liveProfile(viewers);
@@ -272,6 +285,7 @@ async function monitorLivePc(pc) {
   const reason = video.qualityLimitationReason || 'none';
   const dropRatio = dDrop / dEnc;
   const limited = reason === 'cpu' || dropRatio > 0.08 || (reason === 'bandwidth' && dropRatio > 0.02);
+  const mode = (Live.room && Live.room.mode) || 'camera';
   const need = IS_MOBILE ? 1 : 2;   // на телефоне ждать второго замера дорого
   pc.qLimited = limited ? (pc.qLimited || 0) + 1 : 0;
   if (pc.qLimited >= need && pc.qLevel < maxLevel()) {
@@ -279,7 +293,7 @@ async function monitorLivePc(pc) {
     pc.qLevel += 1;
     applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
     updateLiveQualityLabel();
-  } else if (!limited && pc.qLevel > startProfileIndex(Live.room ? Live.room.viewers || 0 : 0)) {
+  } else if (!limited && pc.qLevel > startProfileIndex(Live.room ? Live.room.viewers || 0 : 0, mode)) {
     pc.qClean = (pc.qClean || 0) + 1;
     // сеть стабильна долго — можно вернуть одну ступень (но не выше потолка)
     if (pc.qClean >= 15) {
@@ -467,7 +481,7 @@ async function renderRoom(screen, sid) {
     pc.pendingIce = [];
     Live.room.pcs[viewerId] = pc;
     Live.room.localStream.getTracks().forEach(t => pc.addTrack(t, Live.room.localStream));
-    pc.qLevel = startProfileIndex(Live.room.viewers || 0);
+    pc.qLevel = startProfileIndex(Live.room.viewers || 0, Live.room.mode || 'camera');
     pc.qLimited = 0;
     pc.qPrev = null;
     applyLiveQuality(pc, Live.room.viewers || 0, pc.qLevel);
@@ -573,7 +587,7 @@ async function renderRoom(screen, sid) {
     Live.room.viewers = n;
     const el = $('[data-viewers]', screen);
     if (el) el.textContent = nfmt(n);
-    retuneLiveQuality(n);
+    retuneLiveQuality(n, (Live.room && Live.room.mode) || 'camera');
     updateLiveQualityLabel();
   };
   Live.room.onEnd = () => {
