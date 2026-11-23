@@ -253,7 +253,7 @@ async function openComments(videoId, onCount) {
 }
 
 /* ---------------- feed component ---------------- */
-/* ---------------- feed: random on first visit, then popularity order ---------------- */
+/* ---------------- feed: random video order on every entry ---------------- */
 function foryouShuffle(items) {
   const arr = items.slice();
   for (let i = arr.length - 1; i > 0; i--) {
@@ -262,17 +262,9 @@ function foryouShuffle(items) {
   }
   return arr;
 }
-function foryouScore(v) {
-  return (v.likes || 0) * 3 + (v.views || 0) * 2 + (v.comments_count || 0) * 2 + (v.reposts || 0);
-}
 function foryouOrder(items) {
-  let init = null;
-  try { init = localStorage.getItem('potatos_foryou_init'); } catch (e) { }
-  if (init !== '1') {
-    try { localStorage.setItem('potatos_foryou_init', '1'); } catch (e) { }
-    return foryouShuffle(items);
-  }
-  return items.slice().sort((a, b) => foryouScore(b) - foryouScore(a));
+  // каждый заход в ленту выдаёт видео в случайном порядке
+  return foryouShuffle(items);
 }
 
 function createFeed(root, opts = {}) {
