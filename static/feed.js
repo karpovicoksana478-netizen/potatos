@@ -253,6 +253,28 @@ async function openComments(videoId, onCount) {
 }
 
 /* ---------------- feed component ---------------- */
+/* ---------------- feed: random on first visit, then popularity order ---------------- */
+function foryouShuffle(items) {
+  const arr = items.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+function foryouScore(v) {
+  return (v.likes || 0) * 3 + (v.views || 0) * 2 + (v.comments_count || 0) * 2 + (v.reposts || 0);
+}
+function foryouOrder(items) {
+  let init = null;
+  try { init = localStorage.getItem('potatos_foryou_init'); } catch (e) { }
+  if (init !== '1') {
+    try { localStorage.setItem('potatos_foryou_init', '1'); } catch (e) { }
+    return foryouShuffle(items);
+  }
+  return items.slice().sort((a, b) => foryouScore(b) - foryouScore(a));
+}
+
 function createFeed(root, opts = {}) {
   const st = {
     items: opts.items || [],
@@ -788,8 +810,9 @@ views.home = async function (screen, r) {
     return;
   }
   const d = await api(`/api/feed?scope=${tab}`);
+  const items = tab === 'all' ? foryouOrder(d.items) : (d.items || []);
   createFeed(host, {
-    items: d.items, next: d.next, tab,
+    items, next: d.next, tab,
     more: () => true,
   });
 };
