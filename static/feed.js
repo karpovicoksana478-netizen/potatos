@@ -661,9 +661,10 @@ function createFeed(root, opts = {}) {
     try {
       const d = await api(`/api/feed?cursor=${st.next}&scope=${st.tab}`);
       const start = st.items.length;
-      st.items = st.items.concat(d.items);
+      const batch = st.tab === 'all' ? foryouOrder(d.items) : (d.items || []);
+      st.items = st.items.concat(batch);
       st.next = d.next;
-      d.items.forEach((it, k) => feedEl.insertAdjacentHTML('beforeend', postCard(it, start + k)));
+      batch.forEach((it, k) => feedEl.insertAdjacentHTML('beforeend', postCard(it, start + k)));
       $$('.post', feedEl).slice(-d.items.length).forEach(p => { io.observe(p); bindPost(p); });
     } catch (e) { }
     st.loading = false;
