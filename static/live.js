@@ -338,7 +338,7 @@ async function renderRoom(screen, sid) {
         <div class="live-head-title">${esc(info.title)}</div>
         <div class="live-head-sub"><span class="live-badge">● LIVE</span> <span data-quality>${liveProfile(info.viewers || 0).label}</span> · 👁 <span data-viewers>${nfmt(info.viewers)}</span> · ❤ <span data-likes>${nfmt(info.likes || 0)}</span> · @${esc(info.user.username)}</div>
       </div>
-      ${isBroadcaster ? '<button class="back mic-toggle" data-mic title="Выключить микрофон">🎤</button><button class="btn sm danger" data-end>■ Завершить</button>' : ''}
+      ${isBroadcaster ? '<button class="back" data-share title="Поделиться ссылкой на эфир">🔗</button><button class="back mic-toggle" data-mic title="Выключить микрофон">🎤</button><button class="btn sm danger" data-end>■ Завершить</button>' : ''}
     </div>
     <div class="live-stage">
       <video data-video muted autoplay playsinline></video>
@@ -445,6 +445,43 @@ async function renderRoom(screen, sid) {
 
   if (fsBtn) fsBtn.onclick = enterLiveFullscreen;
   Live.room.exitFullscreen = exitLiveFullscreen;
+
+  // --- ссылка на эфир (для создателя) ---
+  function liveShareLink() {
+    return location.origin + '/#/live/' + sid;
+  }
+  async function shareLive() {
+    const url = liveShareLink();
+    const title = info.title || 'Прямой эфир';
+    const author = info.user && info.user.username ? '@' + info.user.username + ' — ' : '';
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'potatos — эфир', text: author + title, url });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;  // пользователь сам отменил шару
+      }
+    }
+    const m = sheet('Ссылка на эфир', `
+      <div class="inline-note" style="margin-top:0">Отправьте ссылку — эфир откроется прямо в potatos.</div>
+      <input class="field" data-live-link readonly style="margin-top:12px">
+      <div class="live-src"><button class="btn" data-copy>🔗 Копировать ссылку</button></div>`);
+    const input = $('[data-live-link]', m);
+    input.value = url;
+    input.onclick = () => input.select();
+    $('[data-copy]', m).onclick = async () => {
+      let copied = false;
+      try { await navigator.clipboard.writeText(url); copied = true; } catch (e) { }
+      if (!copied) {
+        input.select();
+        try { copied = document.execCommand('copy'); } catch (e) { }
+      }
+      if (copied) { toast('Ссылка скопирована'); Overlay.close(); }
+      else { input.focus(); input.select(); toast('Скопируйте ссылку вручную'); }
+    };
+  }
+  const shareBtn = $('[data-share]', screen);
+  if (shareBtn) shareBtn.onclick = shareLive;
 
   function paintLikes(n) {
     Live.room.likes = n;

@@ -161,7 +161,16 @@ async function loadMe() {
   } catch (e) { App.me = null; return null; }
 }
 function requireAuth() {
-  if (!App.token || !App.me) { location.hash = '#/auth'; return false; }
+  if (!App.token || !App.me) {
+    // чтобы ссылка на эфир/профиль не потерялась после входа — запоминаем куда шли
+    try {
+      if (location.hash && location.hash !== '#/auth') {
+        sessionStorage.setItem('potatos_next', location.hash);
+      }
+    } catch (e) { }
+    location.hash = '#/auth';
+    return false;
+  }
   return true;
 }
 
@@ -415,6 +424,14 @@ function handleWSEvent(d) {
 
 /* ---------------- auth screen ---------------- */
 views.auth = async function (screen) {
+  function nextAfterAuth() {
+    try {
+      const next = sessionStorage.getItem('potatos_next');
+      sessionStorage.removeItem('potatos_next');
+      if (next && next.indexOf('#/') === 0) return next;
+    } catch (e) { }
+    return '#/home';
+  }
   screen.innerHTML = `
   <div class="auth">
     <div class="logo">🥔</div>
@@ -464,13 +481,13 @@ views.auth = async function (screen) {
       App.me = d.user;
       connectWS();
       Badges.load();
-      navigate('#/home');
+      navigate(nextAfterAuth());
     } catch (e) { }
     btn.disabled = false;
   };
   $('[data-go]', screen).onclick = go;
   $$('input', screen).forEach(i => i.onkeydown = e => { if (e.key === 'Enter') go(); });
-  if (App.token) { await loadMe(); if (App.me) navigate('#/home'); }
+  if (App.token) { await loadMe(); if (App.me) navigate(nextAfterAuth()); }
 };
 
 /* ---------------- boot ---------------- */
