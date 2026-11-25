@@ -160,14 +160,17 @@ async function loadMe() {
     return App.me;
   } catch (e) { App.me = null; return null; }
 }
+function rememberNext() {
+  // чтобы ссылка на эфир/профиль не потерялась после входа — запоминаем куда шли
+  try {
+    if (location.hash && location.hash !== '#/auth') {
+      sessionStorage.setItem('potatos_next', location.hash);
+    }
+  } catch (e) { }
+}
 function requireAuth() {
   if (!App.token || !App.me) {
-    // чтобы ссылка на эфир/профиль не потерялась после входа — запоминаем куда шли
-    try {
-      if (location.hash && location.hash !== '#/auth') {
-        sessionStorage.setItem('potatos_next', location.hash);
-      }
-    } catch (e) { }
+    rememberNext();
     location.hash = '#/auth';
     return false;
   }
@@ -326,7 +329,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '34';
+const ASSET_V = '48';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -353,7 +356,7 @@ async function render() {
   const isChat = r.name === 'auth';
   screen.classList.toggle('no-nav', isChat);
 
-  if (r.name !== 'auth' && !App.token) { location.hash = '#/auth'; return; }
+  if (r.name !== 'auth' && !App.token) { rememberNext(); location.hash = '#/auth'; return; }
   if (r.name === 'auth') {
     hideTabbar();
     screen.className = '';
@@ -362,7 +365,7 @@ async function render() {
     return;
   }
   if (!App.me) await loadMe();
-  if (!App.me) { location.hash = '#/auth'; return; }
+  if (!App.me) { rememberNext(); location.hash = '#/auth'; return; }
 
   if (!views[r.name] && r.name !== 'home') await ensureView(r.name);
   if (!views[r.name] && r.name !== 'home') {

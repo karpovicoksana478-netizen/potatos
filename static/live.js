@@ -678,14 +678,30 @@ async function renderRoom(screen, sid) {
       try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
     });
     liveSend({ type: 'live-join', sid });
-    // fallback: если поток не появился за 15 сек — сообщим
-    setTimeout(() => {
-      if (Live.room && !Live.room.leaving && (!video.srcObject || video.readyState < 2)) {
-        wait.hidden = false;
-        wait.textContent = 'Нет видео — обновите страницу эфира';
-      }
-    }, 15000);
   }
+
+  // Если кадры не пошли (например, сервер перезапустился во время эфира),
+  // переподключаемся сами, а не просим пользователя обновлять страницу.
+  let noVideoTicks = 0;
+  Live.room.watchdog = setInterval(() => {
+    const r = Live.room;
+    if (!r || r.leaving || isBroadcaster) return;
+    if (video.readyState >= 2 && video.srcObject) {
+      noVideoTicks = 0;
+      wait.hidden = true;
+      return;
+    }
+    if (!App.ws || App.ws.readyState !== 1) return;
+    noVideoTicks++;
+    wait.hidden = false;
+    wait.textContent = noVideoTicks > 1 ? 'Переподключаемся…' : 'Подключаемся к эфиру…';
+    if (noVideoTicks >= 2) {
+      noVideoTicks = 0;
+      if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
+      r.remotePc = null;
+      setupViewer();
+    }
+  }, 8000);
 
   // события сервера — через LiveRoom.onEvent
   Live.room.onOffer = async (from, sdp) => {
@@ -719,7 +735,20 @@ async function renderRoom(screen, sid) {
       await pc.addIceCandidate(new RTCIceCandidate(cand));
     } catch (e) { }
   };
-  Live.room.onPeer = from => { offerTo(from).catch(e => console.error(e)); };
+  Live.room.onPeer = from => {
+    const r = Live.room;
+    if (!r || r.leaving) return;
+    const old = r.pcs[from];
+    // после обрыва WS старый PC мог остаться «висеть» — закрываем его,
+    // иначе offer не будет создан и зритель будет вечно ждать картинку
+    if (old && old.connectionState !== 'connected') {
+      clearTimeout(old.downTimer);
+      clearInterval(old.qTimer);
+      try { old.close(); } catch (e) { }
+      delete r.pcs[from];
+    }
+    offerTo(from).catch(e => console.error(e));
+  };
   Live.room.onPeerLeft = from => {
     if (Live.room.pendingPeers) Live.room.pendingPeers.delete(from);
     const pc = Live.room.pcs[from];
@@ -781,6 +810,7 @@ function cleanupRoom() {
   const r = Live.room;
   if (!r) return;
   r.leaving = true;
+  if (r.watchdog) clearInterval(r.watchdog);
   try { if (r.exitFullscreen) r.exitFullscreen(); } catch (e) { }
   try { liveSend({ type: 'live-leave', sid: r.sid }); } catch (e) { }
   Object.values(r.pcs || {}).forEach(pc => {

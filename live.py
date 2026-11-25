@@ -201,6 +201,11 @@ def ws_join(uid: int, data: dict):
     with _lock:
         room = ROOMS.setdefault(sid, {"broadcaster": st["user_id"], "members": set()})
         is_broadcaster = uid == st["user_id"]
+        # WS мог переподключиться, а старый участник ещё числиться в комнате.
+        # Если не убрать его, стример не пришлёт новый offer и зритель висит на загрузке.
+        stale = uid in room["members"] and not is_broadcaster
+        if uid in room["members"]:
+            room["members"].discard(uid)
         if is_broadcaster:
             # вернулся после обрыва связи — эфир ещё жив, таймер завершения снимаем
             _cancel_end_timer(room)
@@ -212,9 +217,13 @@ def ws_join(uid: int, data: dict):
             full = False
             room["members"].add(uid)
             viewers = _viewers(room)
+        broadcaster_id = room["broadcaster"]
     if full:
         hub.push([uid], {"type": "live-full", "sid": sid})
         return
+    if stale:
+        # закрываем у стримера старый PC, чтобы на новый live-peer он создал свежий offer
+        hub.push([broadcaster_id], {"type": "live-peer-left", "sid": sid, "from": uid})
     if is_broadcaster:
         # зрители могли зайти раньше стримера — создаём им offer теперь
         for viewer_id in [m for m in room["members"] if m != uid]:
