@@ -125,8 +125,11 @@ async def ws_endpoint(ws: WebSocket):
     except Exception:
         pass
     finally:
-        live.disconnect(uid)
         await hub.disconnect(uid, ws)
+        # если открыто ещё одно соединение того же пользователя (вторая вкладка
+        # или reconnect до закрытия старого сокета) — комната эфира не трогается
+        if not hub.online(uid):
+            live.disconnect(uid)
 
 
 @app.get("/api/health")

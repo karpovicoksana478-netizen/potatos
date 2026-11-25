@@ -384,7 +384,14 @@ function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(App.token)}`);
   App.ws = ws;
-  ws.onopen = () => { App.wsReady = true; };
+  ws.onopen = () => {
+    App.wsReady = true;
+    // после обрыва WS сервер выкидывает из комнаты — возвращаемся в эфир
+    if (window.Live && window.Live.room && !window.Live.room.leaving) {
+      if (window.Live.room.onReconnect) window.Live.room.onReconnect();
+      else liveSend({ type: 'live-join', sid: window.Live.room.sid });
+    }
+  };
   ws.onmessage = ev => {
     let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
     handleWSEvent(d);

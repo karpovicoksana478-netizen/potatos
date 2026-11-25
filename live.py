@@ -22,6 +22,7 @@ TITLE_MAX = 80
 CHAT_MAX = 300
 LIKE_MIN_INTERVAL = 0.12   # секунд между лайками от одного зрителя
 LIKE_PUSH_INTERVAL = 0.25  # секунд между WS-рассылками счётчика
+BROADCASTER_GRACE = 12.0   # секунд на переподключение стримера после обрыва WS
 
 _lock = threading.Lock()
 ROOMS: dict = {}   # sid -> {"broadcaster": int, "members": set[int]}
@@ -41,11 +42,32 @@ def _announce(sid: int, room: dict):
     hub.push(members, {"type": "live-viewers", "sid": sid, "viewers": viewers})
 
 
+def _cancel_end_timer(room: dict):
+    timer = room.pop("end_timer", None)
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+
+
+def _broadcaster_gone(sid: int):
+    """Стример не вернулся за отведённое время — эфир действительно закончен."""
+    with _lock:
+        room = ROOMS.get(sid)
+        if not room or "broadcaster_gone_at" not in room:
+            return
+        room.pop("end_timer", None)
+    end_stream(sid)
+
+
 def end_stream(sid: int):
     """Завершаем эфир: помечаем в БД, выгоняем комнату, уведомляем зрителей."""
     with _lock:
         room = ROOMS.pop(sid, None)
         members = list(room["members"]) if room else []
+        if room:
+            _cancel_end_timer(room)
     db.run("UPDATE live_streams SET ended_at=? WHERE id=? AND ended_at IS NULL",
            (db.now(), sid))
     with _throttle_lock:
@@ -179,6 +201,11 @@ def ws_join(uid: int, data: dict):
     with _lock:
         room = ROOMS.setdefault(sid, {"broadcaster": st["user_id"], "members": set()})
         is_broadcaster = uid == st["user_id"]
+        if is_broadcaster:
+            # вернулся после обрыва связи — эфир ещё жив, таймер завершения снимаем
+            _cancel_end_timer(room)
+            room.pop("broadcaster_gone_at", None)
+            room["broadcaster"] = st["user_id"]
         if not is_broadcaster and _viewers(room) >= MAX_VIEWERS:
             full = True
         else:
@@ -188,7 +215,11 @@ def ws_join(uid: int, data: dict):
     if full:
         hub.push([uid], {"type": "live-full", "sid": sid})
         return
-    if not is_broadcaster:
+    if is_broadcaster:
+        # зрители могли зайти раньше стримера — создаём им offer теперь
+        for viewer_id in [m for m in room["members"] if m != uid]:
+            hub.push([uid], {"type": "live-peer", "sid": sid, "from": viewer_id})
+    else:
         # стример создаёт offer для этого зрителя
         hub.push([st["user_id"]], {"type": "live-peer", "sid": sid, "from": uid})
     hub.push(list(room["members"]), {"type": "live-viewers", "sid": sid, "viewers": viewers})
@@ -209,16 +240,20 @@ def _remove(uid: int, sid: int):
             return
         room["members"].discard(uid)
         broadcaster = room["broadcaster"]
-        if uid == broadcaster:
-            ROOMS.pop(sid, None)
-            members = list(room["members"])
-        else:
-            members = list(room["members"])
+        members = list(room["members"])
+        if uid != broadcaster:
             viewers = _viewers(room)
+        # комната broadcaster'а остаётся живой во время таймера, иначе зрители
+        # увидят «эфир завершён» раньше, чем стример переподключится
     if uid == broadcaster:
-        db.run("UPDATE live_streams SET ended_at=? WHERE id=? AND ended_at IS NULL",
-               (db.now(), sid))
-        hub.push(members, {"type": "live-end", "sid": sid})
+        # WS мог оборваться на секунду: даём стримеру время переподключиться,
+        # а не рубим эфир у всех зрителей сразу
+        _cancel_end_timer(room)
+        room["broadcaster_gone_at"] = time.time()
+        timer = threading.Timer(BROADCASTER_GRACE, _broadcaster_gone, args=(sid,))
+        timer.daemon = True
+        room["end_timer"] = timer
+        timer.start()
     else:
         hub.push([broadcaster], {"type": "live-peer-left", "sid": sid, "from": uid})
         hub.push(members, {"type": "live-viewers", "sid": sid, "viewers": viewers})

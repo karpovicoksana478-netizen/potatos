@@ -327,7 +327,8 @@ async function renderRoom(screen, sid) {
   const me = App.me;
   const isBroadcaster = me && info.user && me.id === info.user.id;
   Live.room = { sid, isBroadcaster, pcs: {}, localStream: null, remotePc: null,
-                leaving: false, viewers: info.viewers || 0 };
+                leaving: false, viewers: info.viewers || 0,
+                pendingPeers: new Set(), ready: false };
 
   screen.innerHTML = `
   <div class="live-room">
@@ -340,8 +341,9 @@ async function renderRoom(screen, sid) {
       ${isBroadcaster ? '<button class="back mic-toggle" data-mic title="Выключить микрофон">🎤</button><button class="btn sm danger" data-end>■ Завершить</button>' : ''}
     </div>
     <div class="live-stage">
-      <video data-video ${isBroadcaster ? 'muted autoplay playsinline' : 'autoplay playsinline'}></video>
+      <video data-video muted autoplay playsinline></video>
       <div class="live-waiting" data-wait>${isBroadcaster ? 'Запускаем камеру…' : 'Подключаемся к эфиру…'}</div>
+      ${isBroadcaster ? '' : '<button class="live-unmute" data-unmute hidden>🔊 Включить звук</button>'}
       <button class="like-fab" data-like aria-label="Нравится">❤</button>
       <div class="hearts" data-hearts></div>
     </div>
@@ -363,6 +365,22 @@ async function renderRoom(screen, sid) {
   const likeBtn = $('[data-like]', screen);
   Live.room.likes = info.likes || 0;
   Live.room.qualityEl = $('[data-quality]', screen);
+
+  // картинка появляется только когда пришли реальные кадры, а не сразу после srcObject
+  function revealLiveVideo() { wait.hidden = true; }
+  video.addEventListener('loadeddata', revealLiveVideo);
+  video.addEventListener('playing', revealLiveVideo);
+
+  const unmuteBtn = $('[data-unmute]', screen);
+  function unmuteLiveVideo() {
+    if (isBroadcaster || !video) return;
+    video.muted = false;
+    if (unmuteBtn) unmuteBtn.hidden = true;
+    const p = video.play();
+    if (p && p.catch) p.catch(function () { });
+  }
+  Live.room.unmute = unmuteLiveVideo;
+  if (unmuteBtn) unmuteBtn.onclick = unmuteLiveVideo;
 
   function paintLikes(n) {
     Live.room.likes = n;
@@ -471,16 +489,34 @@ async function renderRoom(screen, sid) {
     }));
     Live.room.localStream = stream;
     video.srcObject = stream;
-    wait.hidden = true;
+    video.muted = true;
+    const play = video.play();
+    if (play && play.catch) play.catch(function () { });
     liveSend({ type: 'live-join', sid });
+
+    // зрители, которые успели прийти до готового потока, получают offer сейчас
+    Live.room.ready = true;
+    const pendingSet = Live.room.pendingPeers || (Live.room.pendingPeers = new Set());
+    const pending = Array.from(pendingSet);
+    pendingSet.clear();
+    pending.forEach(id => offerTo(id).catch(e => console.error(e)));
   }
 
   // offer создаётся для каждого зрителя, когда сервер скажет «он в комнате»
   async function offerTo(viewerId) {
+    const room = Live.room;
+    if (!room || room.leaving) return;
+    if (!room.localStream) {
+      // камера/экран ещё запрашивается — запоминаем зрителя и сделаем offer позже
+      if (!room.pendingPeers) room.pendingPeers = new Set();
+      room.pendingPeers.add(viewerId);
+      return;
+    }
+    if (room.pcs[viewerId]) return;  // offer уже отправлен этому зрителю
     const pc = new RTCPeerConnection(RTC_CONFIG);
     pc.pendingIce = [];
-    Live.room.pcs[viewerId] = pc;
-    Live.room.localStream.getTracks().forEach(t => pc.addTrack(t, Live.room.localStream));
+    room.pcs[viewerId] = pc;
+    room.localStream.getTracks().forEach(t => pc.addTrack(t, room.localStream));
     pc.qLevel = startProfileIndex(Live.room.viewers || 0, Live.room.mode || 'camera');
     pc.qLimited = 0;
     pc.qPrev = null;
@@ -518,9 +554,13 @@ async function renderRoom(screen, sid) {
     pc.pendingIce = [];
     Live.room.remotePc = pc;
     pc.ontrack = e => {
-      video.srcObject = e.streams[0];
-      wait.hidden = true;
-      video.play().catch(() => { });   // авто.play с звуком иногда блокируется
+      const incoming = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+      video.srcObject = incoming;
+      // браузер разрешает автозапуск только без звука — иначе экран остаётся чёрным
+      video.muted = true;
+      const p = video.play();
+      if (p && p.catch) p.catch(function () { });
+      if (unmuteBtn) unmuteBtn.hidden = false;
     };
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: info.user.id, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
@@ -538,7 +578,12 @@ async function renderRoom(screen, sid) {
     });
     liveSend({ type: 'live-join', sid });
     // fallback: если поток не появился за 15 сек — сообщим
-    setTimeout(() => { if (!video.srcObject && !Live.room.leaving) wait.textContent = 'Ожидаем стрим… (проверьте, идёт ли эфир)'; }, 15000);
+    setTimeout(() => {
+      if (Live.room && !Live.room.leaving && (!video.srcObject || video.readyState < 2)) {
+        wait.hidden = false;
+        wait.textContent = 'Нет видео — обновите страницу эфира';
+      }
+    }, 15000);
   }
 
   // события сервера — через LiveRoom.onEvent
@@ -575,6 +620,7 @@ async function renderRoom(screen, sid) {
   };
   Live.room.onPeer = from => { offerTo(from).catch(e => console.error(e)); };
   Live.room.onPeerLeft = from => {
+    if (Live.room.pendingPeers) Live.room.pendingPeers.delete(from);
     const pc = Live.room.pcs[from];
     if (pc) {
       clearTimeout(pc.downTimer);
@@ -598,6 +644,26 @@ async function renderRoom(screen, sid) {
   Live.room.onChat = addMsg;
   Live.room.onFull = () => { toast('Зал полон — мест нет'); cleanupRoom(); navigate('#/home?tab=live'); };
   Live.room.onError = msg => { toast(msg || 'Ошибка эфира'); cleanupRoom(); navigate('#/home?tab=live'); };
+
+  // WebSocket переподключился: сервер уже выкинул нас из комнаты — заходим заново
+  Live.room.onReconnect = () => {
+    const r = Live.room;
+    if (!r || r.leaving) return;
+    if (isBroadcaster) {
+      Object.values(r.pcs).forEach(pc => {
+        clearTimeout(pc.downTimer);
+        clearInterval(pc.qTimer);
+        try { pc.close(); } catch (e) { }
+      });
+      r.pcs = {};
+      if (r.pendingPeers) r.pendingPeers.clear();
+      liveSend({ type: 'live-join', sid });
+    } else {
+      if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
+      r.remotePc = null;
+      setupViewer();
+    }
+  };
 
   const endBtn = $('[data-end]', screen);
   if (endBtn) endBtn.onclick = () => confirmModal('Завершить эфир для всех?', async () => {
