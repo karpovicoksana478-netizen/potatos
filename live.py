@@ -7,6 +7,10 @@
 WebRTC (CPU/потери) понижается, чтобы не было лагов. Звук — моно 64 кбит/с.
 Не более 3 эфиров одновременно, лимит зрителей на эфир — MAX_VIEWERS.
 """
+import base64
+import hashlib
+import hmac
+import os
 import threading
 import time
 
@@ -23,6 +27,11 @@ CHAT_MAX = 300
 LIKE_MIN_INTERVAL = 0.12   # секунд между лайками от одного зрителя
 LIKE_PUSH_INTERVAL = 0.25  # секунд между WS-рассылками счётчика
 BROADCASTER_GRACE = 12.0   # секунд на переподключение стримера после обрыва WS
+
+# TURN-реле: без него WebRTC между разными NAT работает нестабильно
+TURN_SECRET = os.environ.get("POTATOS_TURN_SECRET", "")
+TURN_HOST = os.environ.get("POTATOS_TURN_HOST", "potatosru.duckdns.org")
+TURN_TTL = 6 * 3600
 
 _lock = threading.Lock()
 ROOMS: dict = {}   # sid -> {"broadcaster": int, "members": set[int]}
@@ -171,6 +180,28 @@ def end(body: dict = None, user=Depends(auth.current_user)):
 def list_active(user=Depends(auth.guest_or_user)):
     rows = db.rows("SELECT * FROM live_streams WHERE ended_at IS NULL ORDER BY id DESC")
     return {"items": [_stream_payload(l) for l in rows], "max": MAX_STREAMS}
+
+
+@router.get("/turn")
+def turn_credentials(user=Depends(auth.current_user)):
+    """Временные логин/пароль TURN для эфиров (REST API coturn)."""
+    if not TURN_SECRET:
+        return {"urls": []}
+    expiry = int(time.time()) + TURN_TTL
+    username = "%d:%d" % (expiry, user["id"])
+    secret = TURN_SECRET.encode("utf-8")
+    credential = base64.b64encode(
+        hmac.new(secret, username.encode("utf-8"), hashlib.sha1).digest()
+    ).decode("ascii")
+    return {
+        "urls": [
+            "turn:%s:3478?transport=udp" % TURN_HOST,
+            "turn:%s:3478?transport=tcp" % TURN_HOST,
+        ],
+        "username": username,
+        "credential": credential,
+        "ttl": TURN_TTL,
+    }
 
 
 @router.get("/{sid}")

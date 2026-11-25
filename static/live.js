@@ -5,13 +5,28 @@
    Экран с ПК стартует со лёгкой ступени (HD 24 для малой аудитории) и не поднимается выше неё —
    тяжёлый контент не держит телефоны-зрителей в лаге.
    Звук — моно 64 кбит/с. */
+const STUN_URLS = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
+/* iceServers меняется на лету: сервер выдаёт временные ключи TURN,
+   чтобы зрители и стример за разными NAT всё равно соединялись */
 const RTC_CONFIG = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-  ],
+  iceServers: [{ urls: STUN_URLS }],
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
 };
+let turnRequested = false;
+async function ensureLiveTurn() {
+  if (turnRequested) return;
+  turnRequested = true;
+  try {
+    const d = await api('/api/live/turn', { silent: true });
+    if (d && d.urls && d.urls.length && d.username && d.credential) {
+      RTC_CONFIG.iceServers = [
+        { urls: STUN_URLS },
+        { urls: d.urls, username: d.username, credential: d.credential },
+      ];
+    }
+  } catch (e) { }
+}
 
 /* Профили качества по числу зрителей. Чем их больше, тем меньше нагрузка
    на кодировщик стримера (у каждого зрителя свой RTCPeerConnection).
@@ -323,6 +338,7 @@ async function renderRoom(screen, sid) {
   let info;
   try { info = await api('/api/live/' + sid, { silent: true }); }
   catch (e) { toast('Эфир не найден или уже закончился'); navigate('#/home?tab=live'); return; }
+  await ensureLiveTurn();
 
   const me = App.me;
   const isBroadcaster = me && info.user && me.id === info.user.id;

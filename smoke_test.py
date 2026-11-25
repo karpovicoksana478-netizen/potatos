@@ -373,7 +373,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=48" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
+    check("shell bumped", "v=49" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -526,6 +526,9 @@ def main():
     check("live: второй эфир от себя отклонён", dup.status_code == 400, dup.status_code)
     live_list = c.get("/api/live", headers=ltok[3]).json()["items"]
     check("live: в списке 3 эфира", len(live_list) == 3, live_list)
+    tr = c.get("/api/live/turn", headers=ltok[0])
+    check("live: TURN-ключи выдаются", tr.status_code == 200 and "urls" in tr.json(), tr.text)
+    check("live: TURN требует логин", c.get("/api/live/turn").status_code in (401, 403))
     # лайки на стримах: счётчик растёт, виден в списке эфиров
     lk1 = c.post(f"/api/live/{st1['id']}/like", headers=ltok[3]).json()
     check("live: лайк стрима", lk1.get("likes") == 1, lk1)
