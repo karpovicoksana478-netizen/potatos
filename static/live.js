@@ -343,6 +343,7 @@ async function renderRoom(screen, sid) {
     <div class="live-stage">
       <video data-video muted autoplay playsinline></video>
       <div class="live-waiting" data-wait>${isBroadcaster ? 'Запускаем камеру…' : 'Подключаемся к эфиру…'}</div>
+      <button class="live-fullscreen" data-fullscreen title="Смотреть весь экран без чата">⛶ Весь экран</button>
       ${isBroadcaster ? '' : '<button class="live-unmute" data-unmute hidden>🔊 Включить звук</button>'}
       <button class="like-fab" data-like aria-label="Нравится">❤</button>
       <div class="hearts" data-hearts></div>
@@ -381,6 +382,69 @@ async function renderRoom(screen, sid) {
   }
   Live.room.unmute = unmuteLiveVideo;
   if (unmuteBtn) unmuteBtn.onclick = unmuteLiveVideo;
+
+  // --- полноэкранный просмотр: только видео, без чата и шапки ---
+  const stage = $('.live-stage', screen);
+  const fsBtn = $('[data-fullscreen]', screen);
+  let fsOverlay = null;
+
+  function onFsChange() {
+    const active = document.fullscreenElement || document.webkitFullscreenElement ||
+                   document.mozFullScreenElement || document.msFullscreenElement;
+    if (!active && fsOverlay) exitLiveFullscreen();
+  }
+
+  function exitLiveFullscreen() {
+    if (!fsOverlay) return;
+    const overlay = fsOverlay;
+    fsOverlay = null;
+    document.removeEventListener('fullscreenchange', onFsChange);
+    document.removeEventListener('webkitfullscreenchange', onFsChange);
+    // возвращаем тот же <video> обратно — WebRTC-поток при этом не прерывается
+    if (video.parentNode !== stage) stage.insertBefore(video, likeBtn);
+    if (unmuteBtn && unmuteBtn.parentNode !== stage) stage.insertBefore(unmuteBtn, likeBtn);
+    overlay.remove();
+    try {
+      const doc = document;
+      if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+        (doc.exitFullscreen || doc.webkitExitFullscreen || doc.mozCancelFullScreen ||
+         doc.msExitFullscreen).call(doc);
+      }
+    } catch (e) { }
+    try { window.screen.orientation && window.screen.orientation.unlock && window.screen.orientation.unlock(); } catch (e) { }
+  }
+
+  function enterLiveFullscreen() {
+    if (fsOverlay || !video || !stage) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'live-fs-overlay';
+    const close = document.createElement('button');
+    close.className = 'live-fs-close';
+    close.textContent = '✕ Закрыть';
+    close.onclick = exitLiveFullscreen;
+    overlay.appendChild(video);
+    if (unmuteBtn) overlay.appendChild(unmuteBtn);
+    overlay.appendChild(close);
+    document.body.appendChild(overlay);
+    fsOverlay = overlay;
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    const req = overlay.requestFullscreen || overlay.webkitRequestFullscreen ||
+                overlay.mozRequestFullScreen || overlay.msRequestFullscreen;
+    if (req) { try { const p = req.call(overlay); if (p && p.catch) p.catch(() => { }); } catch (e) { } }
+    // на телефоне удобнее смотреть широкий экран в альбомной ориентации
+    try {
+      if (window.screen.orientation && window.screen.orientation.lock) {
+        const p = window.screen.orientation.lock('landscape');
+        if (p && p.catch) p.catch(() => { });
+      }
+    } catch (e) { }
+    const play = video.play();
+    if (play && play.catch) play.catch(() => { });
+  }
+
+  if (fsBtn) fsBtn.onclick = enterLiveFullscreen;
+  Live.room.exitFullscreen = exitLiveFullscreen;
 
   function paintLikes(n) {
     Live.room.likes = n;
@@ -680,6 +744,7 @@ function cleanupRoom() {
   const r = Live.room;
   if (!r) return;
   r.leaving = true;
+  try { if (r.exitFullscreen) r.exitFullscreen(); } catch (e) { }
   try { liveSend({ type: 'live-leave', sid: r.sid }); } catch (e) { }
   Object.values(r.pcs || {}).forEach(pc => {
     clearTimeout(pc.downTimer);
