@@ -666,8 +666,17 @@ async function renderRoom(screen, sid) {
   }
 
   // --- зритель ---
-  async function setupViewer() {
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+  // После неудачного прямого соединения ретрай идёт только через TURN:
+  // за NAT повторная попытка host/srflx обычно снова висит без кадров.
+  function viewerConfig(forceRelay) {
+    const hasTurn = RTC_CONFIG.iceServers.some(function (s) {
+      return String(s.urls || '').indexOf('turn:') >= 0;
+    });
+    if (forceRelay && hasTurn) return Object.assign({}, RTC_CONFIG, { iceTransportPolicy: 'relay' });
+    return RTC_CONFIG;
+  }
+  async function setupViewer(forceRelay) {
+    const pc = new RTCPeerConnection(viewerConfig(forceRelay));
     pc.pendingIce = [];
     Live.room.remotePc = pc;
     pc.ontrack = e => {
@@ -710,12 +719,12 @@ async function renderRoom(screen, sid) {
     if (!App.ws || App.ws.readyState !== 1) return;
     noVideoTicks++;
     wait.hidden = false;
-    wait.textContent = noVideoTicks > 1 ? 'Переподключаемся…' : 'Подключаемся к эфиру…';
+    wait.textContent = noVideoTicks > 1 ? 'Переподключаемся через реле…' : 'Подключаемся к эфиру…';
     if (noVideoTicks >= 2) {
       noVideoTicks = 0;
       if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
       r.remotePc = null;
-      setupViewer();
+      setupViewer(true);
     }
   }, 8000);
 
