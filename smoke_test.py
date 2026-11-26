@@ -373,7 +373,7 @@ def main():
     check("media served", c.get("/media/" + up["media"]).status_code == 200)
     check("static cached", "max-age" in c.get("/static/app.js").headers.get("cache-control", ""))
     check("media cached", "max-age" in c.get("/media/" + up["media"]).headers.get("cache-control", ""))
-    check("shell bumped", "v=50" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
+    check("shell bumped", "v=51" in c.get("/").text and "admin.js" in c.get("/").text and "live.js" in c.get("/").text)
 
     # --- админка: вход, список, баны, чужие видео ---
     adm = c.post("/api/login", json={"username": "dmitriy444", "password": "19892012Burmalda"}).json()
@@ -551,6 +551,51 @@ def main():
     c.post("/api/live/end", headers=ltok[2], json={})
     check("live: все завершены",
           len(c.get("/api/live", headers=ltok[3]).json()["items"]) == 0)
+
+    # --- фото-слайды: несколько фото в одном посте ---
+    su = "sl" + S
+    reg = c.post("/api/register", json={"nickname": "Слайды", "username": su,
+                                        "password": "123456"}).json()
+    hs = {"Authorization": "Bearer " + reg["token"]}
+    sfiles = [("file", ("s0.jpg", png(), "image/jpeg"))]
+    sfiles += [("slides", ("s%d.jpg" % i, png(), "image/jpeg")) for i in (1, 2, 3)]
+    sl = c.post("/api/upload", headers=hs, files=sfiles,
+                data={"caption": "карусель"}).json()
+    check("slides: публикация создана", bool(sl.get("id")) and sl["kind"] == "photo", sl)
+    check("slides: 4 слайда в ответе", len(sl.get("slides") or []) == 4, sl.get("slides"))
+    check("slides: первое фото в media", sl["media"] == sl["slides"][0], sl)
+    check("slides: все файлы отдаются",
+          all(c.get("/media/" + p).status_code == 200 for p in sl["slides"]), sl["slides"])
+    one = c.post("/api/upload", headers=hs,
+                 files={"file": ("one.jpg", png(), "image/jpeg")},
+                 data={"caption": "одно фото"}).json()
+    check("slides: старый пост = 1 слайд", len(one.get("slides") or []) == 1, one)
+    check("slides: видео в слайдах отклоняется", c.post("/api/upload", headers=hs, files=[
+        ("file", ("a.jpg", png(), "image/jpeg")),
+        ("slides", ("bad.mp4", b"\x00\x01", "video/mp4")),
+    ], data={"caption": "x"}).status_code == 400)
+    too_many = [("file", ("a.jpg", png(), "image/jpeg"))]
+    too_many += [("slides", ("m%d.jpg" % i, png(8), "image/jpeg")) for i in range(10)]
+    check("slides: больше 10 фото отклоняется",
+          c.post("/api/upload", headers=hs, files=too_many,
+                 data={"caption": "x"}).status_code == 400)
+    one_post = c.get(f"/api/video/{sl['id']}").json()
+    check("slides: в одиночном посте слайды видны",
+          len(one_post.get("slides") or []) == 4, one_post.get("slides"))
+    feed_sl = c.get("/api/feed").json()["items"]
+    feed_post = next((x for x in feed_sl if x["id"] == sl["id"]), None)
+    check("slides: в ленте слайды видны", feed_post and len(feed_post["slides"]) == 4,
+          feed_post and feed_post.get("slides"))
+    prof_sl = c.get(f"/api/user/{su}/videos").json()["items"]
+    check("slides: в профиле слайды видны",
+          any(len(x.get("slides") or []) == 4 for x in prof_sl), prof_sl)
+    ex_sl = c.get("/api/me/export", headers=hs).json()
+    check("slides: в выгрузке есть extra_media",
+          any("карусель" == p["caption"] and p.get("extra_media") for p in ex_sl["posts"]),
+          ex_sl["posts"])
+    c.delete(f"/api/video/{sl['id']}", headers=hs)
+    check("slides: удаление убирает все фото",
+          all(c.get("/media/" + p).status_code == 404 for p in sl["slides"]), sl["slides"])
 
     print(f"\n== PASSED {ok} checks ==")
 

@@ -1,5 +1,7 @@
+import json
 import os
 import re
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -8,6 +10,7 @@ from . import activity, auth, db
 router = APIRouter(prefix="/api")
 
 MAX_UPLOAD = 400 * 1024 * 1024
+MAX_SLIDES = 10
 VIDEO_EXT = {".mp4": ".mp4", ".webm": ".webm", ".mov": ".mp4", ".m4v": ".mp4", ".qt": ".mp4",
              ".avi": ".mp4", ".mkv": ".webm", ".3gp": ".3gp"}
 IMAGE_EXT = {".jpg": ".jpg", ".jpeg": ".jpg", ".png": ".png", ".webp": ".webp",
@@ -16,6 +19,15 @@ IMAGE_EXT = {".jpg": ".jpg", ".jpeg": ".jpg", ".png": ".png", ".webp": ".webp",
 
 def _ext(name: str) -> str:
     return os.path.splitext(name or "")[1].lower()
+
+
+def post_slides(v: dict) -> list:
+    """Все фото поста: первое в media, остальные в extra_media (JSON)."""
+    try:
+        extra = json.loads(v.get("extra_media") or "[]")
+    except Exception:
+        extra = []
+    return ([v["media"]] if v.get("media") else []) + [p for p in extra if isinstance(p, str)]
 
 
 def video_payloads(items, me=None) -> list:
@@ -53,6 +65,7 @@ def video_payloads(items, me=None) -> list:
         u = users.get(v["user_id"])
         out.append({
             **v,
+            "slides": post_slides(v),
             "user": auth.public_user(u) if u else None,
             "likes": likes.get(v["id"], 0),
             "comments_count": comments.get(v["id"], 0),
@@ -74,6 +87,7 @@ def video_payload(v: dict, me) -> dict:
 async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
                  caption: str = Form(""), sound: str = Form(""), kind: str = Form(""),
                  media: str = Form(""), draw: UploadFile = File(None),
+                 slides: Optional[List[UploadFile]] = File(None),
                  user=Depends(auth.current_user)):
     if db.posts_blocked(user):
         raise HTTPException(403, "Вам запрещено публиковать посты")
@@ -118,6 +132,26 @@ async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
             kind = "live"
         media_path = auth.save_file(data, folder, ext)
 
+    # дополнительные фото — слайды, листаются в ленте как карусель
+    extra_paths = []
+    if slides:
+        if media or folder != "images":
+            raise HTTPException(400, "Слайды можно добавлять только к фото-посту")
+        if len(slides) + 1 > MAX_SLIDES:
+            raise HTTPException(400, "Максимум %d фото в посте" % MAX_SLIDES)
+        for sl in slides:
+            if not sl or not sl.filename:
+                continue
+            sdata = await sl.read()
+            if not sdata:
+                raise HTTPException(400, "Пустой слайд")
+            if len(sdata) > MAX_UPLOAD:
+                raise HTTPException(413, "Слайд слишком большой")
+            sext = _ext(sl.filename)
+            if sext not in IMAGE_EXT and not (sl.content_type or "").startswith("image/"):
+                raise HTTPException(400, "Слайды — только фото")
+            extra_paths.append(auth.save_file(sdata, "images", IMAGE_EXT.get(sext, ".jpg")))
+
     # нарисованное поверх видео (карандаш) — накладываем на сервере
     burned = False
     if draw is not None and draw.filename and folder == "videos":
@@ -141,8 +175,10 @@ async def upload(file: UploadFile = File(None), thumb: UploadFile = File(None),
             thumb_url = auth.save_file(frame, "thumbs", ".jpg")
 
     vid = db.run(
-        "INSERT INTO videos (user_id, kind, media, thumb, caption, sound, created_at) VALUES (?,?,?,?,?,?,?)",
-        (user["id"], kind, media_path, thumb_url, caption.strip()[:500], sound.strip()[:120], db.now()))
+        "INSERT INTO videos (user_id, kind, media, extra_media, thumb, caption, sound, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (user["id"], kind, media_path, json.dumps(extra_paths, ensure_ascii=False),
+         thumb_url, caption.strip()[:500], sound.strip()[:120], db.now()))
     for m in activity.mentions(caption):
         activity.add(m["id"], "mention", actor=user, post_id=vid, text=caption.strip()[:200])
     v = db.one("SELECT * FROM videos WHERE id=?", (vid,))
@@ -368,7 +404,7 @@ def delete_video(vid: int, user=Depends(auth.current_user)):
     if is_admin_foreign:
         from . import actions
         owner = db.one("SELECT username FROM users WHERE id=?", (v["user_id"],))
-        files = [v["media"], v.get("thumb") or ""]
+        files = [v["media"], v.get("thumb") or ""] + post_slides(v)[1:]
         detail = {"row": dict(v), "files": files,
                   "summary": v["caption"] or "[медиа]",
                   "owner": (owner or {}).get("username"), "reason": "удалено из ленты"}
@@ -377,11 +413,12 @@ def delete_video(vid: int, user=Depends(auth.current_user)):
         db.run("DELETE FROM videos WHERE id=?", (vid,))
         return {"ok": True}
     db.run("DELETE FROM videos WHERE id=?", (vid,))
-    for folder in ("videos", "images", "thumbs"):
-        try:
-            os.remove(os.path.join(db.MEDIA, folder, os.path.basename(v["media"])))
-        except OSError:
-            pass
+    for rel in post_slides(v):
+        for folder in ("videos", "images", "thumbs"):
+            try:
+                os.remove(os.path.join(db.MEDIA, folder, os.path.basename(rel)))
+            except OSError:
+                pass
     return {"ok": True}
 
 

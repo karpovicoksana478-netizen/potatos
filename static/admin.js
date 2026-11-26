@@ -217,7 +217,7 @@ views.admin = async function (screen) {
   };
 
   /* ---------- статистика ---------- */
-  api('/api/admin/stats', { silent: true }).then(d => {
+  const paintStats = () => api('/api/admin/stats', { silent: true }).then(d => {
     const cells = $$('.astat b', screen);
     if (cells.length >= 4) {
       cells[0].textContent = d.users;
@@ -228,6 +228,12 @@ views.admin = async function (screen) {
     const oc = $('[data-opencount]', screen);
     if (oc && d.reports_open) oc.textContent = ` (${d.reports_open})`;
   }).catch(() => { });
+  paintStats();
+  // онлайн в эфире меняется без HTTP-запросов — обновляем счётчик, пока экран открыт
+  const statsTimer = setInterval(() => {
+    if (!document.body.contains(screen)) { clearInterval(statsTimer); return; }
+    paintStats();
+  }, 10000);
 
   /* ---------- жалобы ---------- */
   let filter = 'open';

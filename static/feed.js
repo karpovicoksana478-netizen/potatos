@@ -309,10 +309,22 @@ function createFeed(root, opts = {}) {
   function postCard(v, i) {
     const u = v.user || {};
     const isPhoto = v.kind === 'photo';
-    const mediaHTML = isPhoto
-      ? `<img class="media" src="/media/${esc(v.media)}" loading="${i < 2 ? 'eager' : 'lazy'}" alt="">`
-      : `<video class="media" src="/media/${esc(v.media)}" ${v.thumb ? `poster="/media/${esc(v.thumb)}"` : ''}
-           loop playsinline preload="none" muted></video>`;
+    const slides = (v.slides && v.slides.length) ? v.slides : (v.media ? [v.media] : []);
+    const carousel = slides.length > 1;
+    let mediaHTML;
+    if (carousel) {
+      mediaHTML = `<div class="media-track" data-carousel>${slides.map((s, si) =>
+        `<img class="slide${si === 0 ? ' media' : ''}" src="/media/${esc(s)}"
+           loading="${si < 2 ? 'eager' : 'lazy'}" alt="" draggable="false">`).join('')}</div>
+        <div class="slide-dots" data-slide-dots>${slides.map((_, si) =>
+          `<i class="${si === 0 ? 'on' : ''}"></i>`).join('')}</div>
+        <div class="slide-count" data-slide-count>1 / ${slides.length}</div>`;
+    } else {
+      mediaHTML = isPhoto
+        ? `<img class="media" src="/media/${esc(v.media)}" loading="${i < 2 ? 'eager' : 'lazy'}" alt="">`
+        : `<video class="media" src="/media/${esc(v.media)}" ${v.thumb ? `poster="/media/${esc(v.thumb)}"` : ''}
+             loop playsinline preload="none" muted></video>`;
+    }
     const followUI = (v.mine || !App.me) ? '' :
       (v.followed
         ? `<button class="follow done" data-follow title="Вы подписаны">✓</button>`
@@ -383,6 +395,53 @@ function createFeed(root, opts = {}) {
     const media = $('.media', p);
     let tapT = null;
     let suppressClick = false;
+
+    // фото-слайды: листаем пальцем по горизонтали, вертикальный скролл ленты не трогаем
+    const track = $('[data-carousel]', p);
+    if (track) {
+      const dotsWrap = $('[data-slide-dots]', p);
+      const dots = dotsWrap ? $$('i', dotsWrap) : [];
+      const counter = $('[data-slide-count]', p);
+      let idx = 0, startX = 0, startY = 0, dx = 0, dragging = false, axis = null;
+      const setSlide = n => {
+        idx = Math.max(0, Math.min(dots.length - 1, n));
+        track.style.transform = 'translateX(' + (-idx * 100) + '%)';
+        dots.forEach((d, di) => d.classList.toggle('on', di === idx));
+        if (counter) counter.textContent = (idx + 1) + ' / ' + dots.length;
+      };
+      track.addEventListener('pointerdown', e => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        dragging = true; axis = null; dx = 0;
+        startX = e.clientX; startY = e.clientY;
+        try { track.setPointerCapture(e.pointerId); } catch (_) { }
+      });
+      track.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        const mx = e.clientX - startX, my = e.clientY - startY;
+        if (!axis && (Math.abs(mx) > 8 || Math.abs(my) > 8)) {
+          axis = Math.abs(mx) > Math.abs(my) * 1.3 ? 'x' : 'y';
+        }
+        if (axis !== 'x') return;
+        dx = mx;
+        track.classList.add('dragging');
+        track.style.transform = 'translateX(calc(' + (-idx * 100) + '% + ' + dx + 'px))';
+      });
+      const finish = () => {
+        if (!dragging) return;
+        dragging = false;
+        track.classList.remove('dragging');
+        if (axis === 'x' && Math.abs(dx) > 40) {
+          setSlide(idx + (dx < 0 ? 1 : -1));
+          suppressClick = true;
+        } else {
+          track.style.transform = 'translateX(' + (-idx * 100) + '%)';
+        }
+        axis = null; dx = 0;
+      };
+      track.addEventListener('pointerup', finish);
+      track.addEventListener('pointercancel', finish);
+      p._setSlide = setSlide;
+    }
 
     // клик по всему посту (оверлеи .shade/.paused перехватывают события — раньше пауза «не срабатывала»)
     p.addEventListener('click', e => {
@@ -849,6 +908,7 @@ views.plus = async function (screen) {
   if (!requireAuth()) return;
   let mode = 'video';
   let file = null, thumbBlob = null, previewURL = null;
+  let extraFiles = [], slideURLs = [];   // дополнительные фото слайдами
   let drawBlob = null;        // рисунок поверх видео (PNG с прозрачностью)
   let recorder = null, chunks = [], recStream = null, recTimer = null, liveBlob = null;
 
@@ -865,9 +925,9 @@ views.plus = async function (screen) {
       <label class="drop" for="f-photo">
         <span class="ic">🖼</span>
         <b>Выбрать фото</b>
-        <span class="muted" style="font-size:13px">Из галереи или камеры</span>
+        <span class="muted" style="font-size:13px">Можно выбрать несколько — они листаются слайдами</span>
       </label>
-      <input id="f-photo" type="file" accept="image/*" hidden>
+      <input id="f-photo" type="file" accept="image/*" multiple hidden>
     </div>
 
     <div data-pane="video">
@@ -947,31 +1007,43 @@ views.plus = async function (screen) {
 
   function clearFile() {
     file = null; thumbBlob = null; liveBlob = null;
-    drawBlob = null;
+    drawBlob = null; extraFiles = [];
     $('[data-drawnote]', screen).hidden = true;
     if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
+    slideURLs.forEach(u => URL.revokeObjectURL(u)); slideURLs = [];
     holder.innerHTML = ''; previewBox.hidden = true;
   }
   $('[data-clear]', screen).onclick = () => { clearFile(); stopCam(); };
 
-  async function showFile(f) {
+  async function showFile(f, extras) {
     if (!f) return;
     file = f;
+    extraFiles = (extras || []).slice(0, 9);
     liveBlob = null;
     if (previewURL) URL.revokeObjectURL(previewURL);
+    slideURLs.forEach(u => URL.revokeObjectURL(u)); slideURLs = [];
     previewURL = URL.createObjectURL(f);
     if (f.type.startsWith('video/')) {
       holder.innerHTML = `<video class="preview" src="${previewURL}" controls playsinline muted></video>`;
       thumbBlob = await videoThumb(f);
     } else {
-      holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">`;
+      const thumbs = extraFiles.map(x => {
+        const url = URL.createObjectURL(x); slideURLs.push(url);
+        return `<img src="${url}" alt="">`;
+      }).join('');
+      holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">` +
+        (thumbs ? `<div class="slide-preview">${thumbs}</div>
+          <div class="inline-note">${extraFiles.length + 1} фото — в ленте будут листаться слайдами</div>` : '');
       thumbBlob = f;
     }
     previewBox.hidden = false;
     previewBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  $('#f-photo', screen).onchange = e => showFile(e.target.files[0]);
+  $('#f-photo', screen).onchange = e => {
+    const all = Array.from(e.target.files || []);
+    showFile(all[0], all.slice(1));
+  };
   $('#f-video', screen).onchange = e => showFile(e.target.files[0]);
 
   /* ---- карандаш: рисование поверх фото/видео ---- */
@@ -989,8 +1061,12 @@ views.plus = async function (screen) {
         thumbBlob = blob;
         URL.revokeObjectURL(previewURL);
         previewURL = URL.createObjectURL(blob);
-        holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">`;
-        toast('Рисунок наложен на фото');
+        // слайды не теряем: рисунок накладываем только на первое фото
+        const strip = slideURLs.map(u => `<img src="${u}" alt="">`).join('');
+        holder.innerHTML = `<img class="preview" src="${previewURL}" alt="">` +
+          (strip ? `<div class="slide-preview">${strip}</div>` : '');
+        toast(extraFiles.length ? 'Рисунок на первом фото, остальные слайды сохранены'
+          : 'Рисунок наложен на фото');
       }
     });
   };
@@ -1080,6 +1156,7 @@ views.plus = async function (screen) {
     try {
       const fd = new FormData();
       fd.append('file', file, file.name || 'media');
+      extraFiles.forEach((sf, si) => fd.append('slides', sf, sf.name || ('slide' + (si + 1) + '.jpg')));
       if (thumbBlob) fd.append('thumb', thumbBlob, 'thumb.jpg');
       if (drawBlob && file.type.startsWith('video/')) fd.append('draw', drawBlob, 'draw.png');
       fd.append('caption', caption);

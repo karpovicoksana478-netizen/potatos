@@ -329,7 +329,7 @@ function renderTabbar(active) {
 
 function hideTabbar() { $('#tabbar').hidden = true; }
 
-const ASSET_V = '50';
+const ASSET_V = '51';
 
 /* Раздел может не загрузиться (старый кэш) — подтягиваем его файл на лету. */
 async function ensureView(name) {
@@ -390,6 +390,7 @@ async function render() {
 }
 
 /* ---------------- websocket ---------------- */
+let wsEverOpened = false;
 function connectWS() {
   if (!App.token) return;
   if (App.ws && (App.ws.readyState === 0 || App.ws.readyState === 1)) return;
@@ -398,8 +399,13 @@ function connectWS() {
   App.ws = ws;
   ws.onopen = () => {
     App.wsReady = true;
-    // после обрыва WS сервер выкидывает из комнаты — возвращаемся в эфир
-    if (window.Live && window.Live.room && !window.Live.room.leaving) {
+    const isReconnect = wsEverOpened;
+    wsEverOpened = true;
+    // signaling, накопленный во время подключения WS, не должен теряться
+    if (typeof flushLiveOutbox === 'function') flushLiveOutbox();
+    // после обрыва WS сервер выкидывает из комнаты — возвращаемся в эфир.
+    // при первом открытии join уже ушёл из очереди — не шлём его второй раз
+    if (isReconnect && window.Live && window.Live.room && !window.Live.room.leaving) {
       if (window.Live.room.onReconnect) window.Live.room.onReconnect();
       else liveSend({ type: 'live-join', sid: window.Live.room.sid });
     }
@@ -408,7 +414,13 @@ function connectWS() {
     let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
     handleWSEvent(d);
   };
-  ws.onclose = () => { App.wsReady = false; App.ws = null; if (App.token) setTimeout(connectWS, 2500); };
+  ws.onclose = () => {
+    App.wsReady = false;
+    App.ws = null;
+    // старые offer/ICE после обрыва уже неактуальны
+    if (typeof clearLiveOutbox === 'function') clearLiveOutbox();
+    if (App.token) setTimeout(connectWS, 2500);
+  };
   ws.onerror = () => { try { ws.close(); } catch (e) { } };
 }
 

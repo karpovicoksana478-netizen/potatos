@@ -103,6 +103,9 @@ async def ws_endpoint(ws: WebSocket):
         while True:
             data = await ws.receive_json()
             t = data.get("type")
+            # в эфире нет обычных HTTP-запросов, поэтому «в сети» обновляем здесь:
+            # пинги, чат и ICE-сообщения почти всегда идут каждые 25 секунд
+            auth.touch_uid(uid)
             if t == "typing":
                 chat_id = int(data.get("chat_id") or 0)
                 members = [m["user_id"] for m in db.rows(

@@ -5,7 +5,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import actions, auth, db
+from . import actions, auth, db, hub
 
 router = APIRouter(prefix="/api/admin")
 
@@ -62,8 +62,10 @@ def stats(admin=Depends(admin_user)):
     return {
         "users": db.one("SELECT COUNT(*) c FROM users")["c"],
         "videos": db.one("SELECT COUNT(*) c FROM videos")["c"],
-        "online": db.one("SELECT COUNT(*) c FROM users WHERE last_seen >= ?",
-                         (int(time.time()) - 90,))["c"],
+        # WebSocket в эфире важнее last_seen: зритель может часами не делать HTTP-запросов
+        "online": len({r["id"] for r in db.rows(
+            "SELECT id FROM users WHERE last_seen >= ?", (int(time.time()) - 90,))}
+            | hub.online_ids()),
         "banned": db.one("SELECT COUNT(*) c FROM users WHERE banned_until=-1 OR banned_until > ?",
                          (int(time.time()),))["c"],
         "reports_open": db.one(
@@ -87,7 +89,7 @@ def users(q: str = "", limit: int = 100, admin=Depends(admin_user)):
         "ORDER BY (u.last_seen >= ?) DESC, u.id DESC LIMIT ?",
         (q or "", like, like, now - 90, limit))
     for r in rows:
-        r["online"] = bool(r["last_seen"] and now - r["last_seen"] <= 90)
+        r["online"] = hub.online(r["id"]) or bool(r["last_seen"] and now - r["last_seen"] <= 90)
         r["banned"] = r["banned_until"] == -1 or r["banned_until"] > now
         r["banned_forever"] = r["banned_until"] == -1
         r["posts_blocked"] = r["posts_banned_until"] == -1 or r["posts_banned_until"] > now
@@ -198,7 +200,11 @@ def resolve_report(rid: int, body: dict, admin=Depends(admin_user)):
             if v:
                 t = {**_user_brief(db.one("SELECT * FROM users WHERE id=?", (v["user_id"],)) or {}),
                      "caption": v["caption"]}
-                files = [v["media"], v.get("thumb") or ""]
+                try:
+                    extra = json.loads(v.get("extra_media") or "[]")
+                except Exception:
+                    extra = []
+                files = [v["media"], v.get("thumb") or ""] + [p for p in extra if isinstance(p, str)]
                 detail = {"row": dict(v), "files": files, "summary": v["caption"] or "[медиа]",
                           "owner": (t or {}).get("username"), "reason": r.get("reason") or ""}
                 aid = actions.log(admin["id"], actions.ACTION_DELETE_VIDEO, "video",

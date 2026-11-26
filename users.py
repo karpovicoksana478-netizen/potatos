@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -180,7 +181,7 @@ def export_me(user=Depends(auth.current_user)):
         "app": "potatos",
         "exported_at": db.now(),
         "profile": prof,
-        "posts": db.rows("SELECT id, kind, media, thumb, caption, sound, views, created_at "
+        "posts": db.rows("SELECT id, kind, media, extra_media, thumb, caption, sound, views, created_at "
                          "FROM videos WHERE user_id=? ORDER BY id DESC", (uid,)),
         "comments": db.rows("SELECT id, video_id, text, media, parent_id, created_at "
                             "FROM comments WHERE user_id=? ORDER BY id DESC", (uid,)),
@@ -218,9 +219,16 @@ def delete_me(body: dict, user=Depends(auth.current_user)):
             except OSError:
                 pass
 
-    for v in db.rows("SELECT media, thumb FROM videos WHERE user_id=?", (uid,)):
+    for v in db.rows("SELECT media, extra_media, thumb FROM videos WHERE user_id=?", (uid,)):
         _unlink(v["media"])
         _unlink(v["thumb"])
+        try:
+            extra = json.loads(v["extra_media"] or "[]")
+        except Exception:
+            extra = []
+        for rel in extra:
+            if isinstance(rel, str):
+                _unlink(rel)
     _unlink(user.get("avatar") or "")
     _unlink(user.get("banner") or "")
     for cm in db.rows("SELECT media FROM comments WHERE user_id=?", (uid,)):

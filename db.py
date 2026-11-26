@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS videos (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL DEFAULT 'video',
   media TEXT NOT NULL,
+  extra_media TEXT NOT NULL DEFAULT '',
   thumb TEXT NOT NULL DEFAULT '',
   caption TEXT NOT NULL DEFAULT '',
   sound TEXT NOT NULL DEFAULT '',
@@ -200,6 +201,9 @@ def _migrate():
     ):
         if col not in have:
             db().execute(sql)
+    vhave = {r["name"] for r in db().execute("PRAGMA table_info(videos)")}
+    if "extra_media" not in vhave:
+        db().execute("ALTER TABLE videos ADD COLUMN extra_media TEXT NOT NULL DEFAULT ''")
     uhave = {r["name"] for r in db().execute("PRAGMA table_info(users)")}
     for col, sql in (
         ("is_admin", "ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0"),

@@ -2,10 +2,11 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
 
 from fastapi import Header, HTTPException
 
-from . import db
+from . import db, hub
 
 ITERATIONS = 120_000
 
@@ -61,6 +62,21 @@ def _touch(user: dict):
             pass
 
 
+_touch_cache = {}       # uid -> последняя запись в БД (ICE-сообщений бывает много)
+
+
+def touch_uid(uid: int):
+    """Обновить last_seen по id — для WebSocket-пингов и активности в эфире."""
+    now = int(time.time())
+    if now - _touch_cache.get(uid, 0) <= 45:
+        return
+    _touch_cache[uid] = now
+    try:
+        db.run("UPDATE users SET last_seen=? WHERE id=?", (now, uid))
+    except Exception:
+        pass
+
+
 def guest_or_user(authorization: str = Header(default=""), x_token: str = Header(default="")):
     token = x_token or authorization.replace("Bearer ", "").strip()
     user = user_by_token(token)
@@ -80,7 +96,7 @@ def public_user(u: dict, extra: dict = None) -> dict:
         "is_admin": bool(u.get("is_admin") or 0),
         "is_super": bool(u.get("is_superadmin") or 0),
         "verified": bool(u.get("verified") or 0),
-        "online": db.online(u),
+        "online": bool(hub.online(u["id"])) or db.online(u),
     }
     if extra:
         out.update(extra)

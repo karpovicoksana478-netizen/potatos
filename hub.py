@@ -54,3 +54,8 @@ async def _fanout(ids, event):
 
 def online(user_id: int) -> bool:
     return bool(conns.get(user_id))
+
+
+def online_ids() -> set:
+    """Пользователи с открытым WebSocket — их всегда считаем онлайн."""
+    return {uid for uid, socks in conns.items() if socks}

@@ -1,10 +1,8 @@
 /* potatos — прямые эфиры: WebRTC mesh + чат
-   На ПК камера 720p@30, экран до 720p@30; на телефоне захват 540p@24 и потолок
-   качества 480p. Качество отправки зависит от числа зрителей, стартует на ступень
-   скромнее и по статистике WebRTC (CPU/потери) понижается, чтобы не было лагов.
-   Экран с ПК стартует со лёгкой ступени (HD 24 для малой аудитории) и не поднимается выше неё —
-   тяжёлый контент не держит телефоны-зрителей в лаге.
-   Звук — моно 64 кбит/с. */
+   На ПК камера и экран до 720p@30; на телефоне захват до 540p@30.
+   Старт идёт сразу с целевого профиля (для малой аудитории — HD 30), дальше
+   качество подстраивается по статистике WebRTC (CPU, полосе, задержке и потерям).
+   Если это только один зритель — картинка не должна быть размытой. */
 const STUN_URLS = ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'];
 /* iceServers меняется на лету: сервер выдаёт временные ключи TURN,
    чтобы зрители и стример за разными NAT всё равно соединялись */
@@ -13,24 +11,27 @@ const RTC_CONFIG = {
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
 };
-let turnRequested = false;
-async function ensureLiveTurn() {
-  if (turnRequested) return;
-  turnRequested = true;
-  try {
-    const d = await api('/api/live/turn', { silent: true });
+let turnPromise = null;
+function ensureLiveTurn() {
+  if (turnPromise) return turnPromise;
+  turnPromise = api('/api/live/turn', { silent: true }).then(d => {
     if (d && d.urls && d.urls.length && d.username && d.credential) {
       RTC_CONFIG.iceServers = [
         { urls: STUN_URLS },
         { urls: d.urls, username: d.username, credential: d.credential },
       ];
     }
-  } catch (e) { }
+    return d;
+  }).catch(e => {
+    turnPromise = null;   // сервер может быть ещё не готов — попробуем ещё раз
+    return null;
+  });
+  return turnPromise;
 }
 
 /* Профили качества по числу зрителей. Чем их больше, тем меньше нагрузка
    на кодировщик стримера (у каждого зрителя свой RTCPeerConnection).
-   Старт — на ступень скромнее целевой, дальше по статистике только понижаем. */
+   Стартуем с целевого профиля и возвращаемся к нему, когда зрителей стало меньше. */
 const LIVE_PROFILES = [
   { upTo: 3, label: 'HD 30', height: 720, fps: 30, videoBitrate: 2500000, audioBitrate: 64000 },
   { upTo: 8, label: 'HD 24', height: 540, fps: 24, videoBitrate: 1500000, audioBitrate: 64000 },
@@ -54,6 +55,8 @@ const IS_MOBILE = (() => {
   } catch (e) { return false; }
 })();
 const MOBILE_MIN_LEVEL = 1;                       // телефон не поднимается выше 540p
+// буфер поменьше: картинка появляется раньше, а лёгкие рывки сглаживаются
+const LIVE_JITTER_MS = IS_MOBILE ? 250 : 120;
 const MOBILE_CAPTURE = {
   width: { ideal: 960, max: 1280 },
   height: { ideal: 540, max: 720 },
@@ -75,14 +78,8 @@ function cameraConstraints() {
   return { facingMode: 'user', ...base };
 }
 function startProfileIndex(viewers, mode) {
-  const idx = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers) + 1));
-  if (mode === 'screen') {
-    // экран стартует со лёгкой ступени (HD 24 для малой аудитории) и не поднимается выше неё —
-    // тяжёлый контент (мультипликация, окна) не грузит телефоны-зрителей
-    const screenStart = Math.max(minLevel(), Math.min(maxLevel(), 1));
-    return Math.max(screenStart, idx);
-  }
-  return idx;
+  // Раньше здесь было +1, из-за чего HD 30 вообще никогда не включался.
+  return Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers)));
 }
 
 const Live = {
@@ -92,9 +89,21 @@ const Live = {
   pendingMode: null,     // 'camera' | 'screen'
 };
 
+const liveOutbox = [];
 function liveSend(obj) {
-  if (App.ws && App.ws.readyState === 1) App.ws.send(JSON.stringify(obj));
+  if (App.ws && App.ws.readyState === 1) {
+    App.ws.send(JSON.stringify(obj));
+    return;
+  }
+  // WS ещё подключается — не теряем offer/answer/join, отправим сразу после open
+  liveOutbox.push(obj);
 }
+function flushLiveOutbox() {
+  while (liveOutbox.length && App.ws && App.ws.readyState === 1) {
+    App.ws.send(JSON.stringify(liveOutbox.shift()));
+  }
+}
+function clearLiveOutbox() { liveOutbox.length = 0; }
 
 /* ---------------- общий кусок: верхние вкладки как в ленте ---------------- */
 function feedTopHTML(tab) {
@@ -271,50 +280,65 @@ function updateLiveQualityLabel() {
 function retuneLiveQuality(viewers, mode) {
   const target = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers)));
   Object.values((Live.room && Live.room.pcs) || {}).forEach(pc => {
-    if (pc.qLevel == null) pc.qLevel = startProfileIndex(viewers, mode);
-    // для экрана не поднимаем качество при росте зрителей — тяжёлый контент + рост = нагрузка
-    if (mode !== 'screen' && pc.qLevel < target) pc.qLevel = target;
+    if (pc.qLevel == null) pc.qLevel = target;
+    // зрителей стало больше — режем качество; стало меньше и нет перегрузки — возвращаем
+    // сразу после автоснижения не дёргаем качество обратно на событии «зрители»
+    const cooling = pc.qCooldownUntil && Date.now() < pc.qCooldownUntil;
+    if (pc.qLevel < target || (pc.qLevel > target && !cooling)) pc.qLevel = target;
     applyLiveQuality(pc, viewers, pc.qLevel);
   });
   return liveProfile(viewers);
 }
 
-/* Следим за статистикой кодировщика: если Chrome говорит про CPU/losses —
-   понижаем ступень. Это дешевле, чем держать 720p на слабом телефоне. */
+/* Следим за статистикой: CPU, полоса, задержка и потери видны и у стримера,
+   и со стороны зрителя (remote-inbound-rtp). Понижаем ступень быстро,
+   возвращаем — только когда сеть действительно спокойная. */
 async function monitorLivePc(pc) {
   if (!pc || pc.connectionState !== 'connected') return;
   let stats;
   try { stats = await pc.getStats(); } catch (e) { return; }
-  let video = null;
+  let video = null, inbound = null;
   stats.forEach(s => {
-    if (s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) video = s;
+    if (s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')
+        && !s.isRtx && s.framesEncoded !== undefined) video = s;
+    if (s.type === 'remote-inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')
+        && !s.isRtx) inbound = s;
   });
   if (!video) return;
-  const prev = pc.qPrev || { encoded: 0, dropped: 0 };
   const encoded = video.framesEncoded || 0;
   const dropped = video.framesDropped || 0;
+  const rtt = inbound ? (inbound.roundTripTime || 0) : 0;
+  const lost = inbound ? (inbound.packetsLost || 0) : 0;
+  if (pc.qPrev == null) {   // первое измерение не сравниваем с нулём (ложный даунгрейд на старте)
+    pc.qPrev = { encoded, dropped, lost };
+    return;
+  }
+  const prev = pc.qPrev;
   const dEnc = encoded - prev.encoded;
   const dDrop = dropped - prev.dropped;
-  pc.qPrev = { encoded, dropped };
+  const dLost = Math.max(0, lost - prev.lost);
+  pc.qPrev = { encoded, dropped, lost };
   if (dEnc <= 0) return;
   const reason = video.qualityLimitationReason || 'none';
   const dropRatio = dDrop / dEnc;
-  const limited = reason === 'cpu' || dropRatio > 0.08 || (reason === 'bandwidth' && dropRatio > 0.02);
-  const mode = (Live.room && Live.room.mode) || 'camera';
-  const need = IS_MOBILE ? 1 : 2;   // на телефоне ждать второго замера дорого
+  const limited = reason === 'cpu' || reason === 'bandwidth'
+    || dropRatio > 0.06 || dLost > 4 || rtt > 0.35;
+  const viewers = Live.room ? Live.room.viewers || 0 : 0;
+  const target = Math.max(minLevel(), Math.min(maxLevel(), liveProfileIndex(viewers)));
+  const need = IS_MOBILE ? 1 : 2;
   pc.qLimited = limited ? (pc.qLimited || 0) + 1 : 0;
   if (pc.qLimited >= need && pc.qLevel < maxLevel()) {
     pc.qLimited = 0;
+    pc.qCooldownUntil = Date.now() + 20000;
     pc.qLevel += 1;
-    applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
+    applyLiveQuality(pc, viewers, pc.qLevel);
     updateLiveQualityLabel();
-  } else if (!limited && pc.qLevel > startProfileIndex(Live.room ? Live.room.viewers || 0 : 0, mode)) {
+  } else if (!limited && pc.qLevel > target) {
     pc.qClean = (pc.qClean || 0) + 1;
-    // сеть стабильна долго — можно вернуть одну ступень (но не выше потолка)
-    if (pc.qClean >= 15) {
+    if (pc.qClean >= 8) {   // ~16 секунд чистой сети вместо 30
       pc.qClean = 0;
-      pc.qLevel = Math.max(minLevel(), pc.qLevel - 1);
-      applyLiveQuality(pc, Live.room ? Live.room.viewers || 0 : 0, pc.qLevel);
+      pc.qLevel = Math.max(target, pc.qLevel - 1);
+      applyLiveQuality(pc, viewers, pc.qLevel);
       updateLiveQualityLabel();
     }
   } else {
@@ -336,9 +360,12 @@ async function renderRoom(screen, sid) {
   if (!requireAuth()) return;
   screen.innerHTML = '<div class="loader"><div class="spin"></div></div>';
   let info;
-  try { info = await api('/api/live/' + sid, { silent: true }); }
+  // TURN-ключи запрашиваем параллельно с информацией об эфире, чтобы не ждать лишний RTT
+  const infoPromise = api('/api/live/' + sid, { silent: true });
+  const turnWait = ensureLiveTurn();
+  try { info = await infoPromise; }
   catch (e) { toast('Эфир не найден или уже закончился'); navigate('#/home?tab=live'); return; }
-  await ensureLiveTurn();
+  await turnWait;
 
   const me = App.me;
   const isBroadcaster = me && info.user && me.id === info.user.id;
@@ -634,34 +661,47 @@ async function renderRoom(screen, sid) {
     pc.pendingIce = [];
     room.pcs[viewerId] = pc;
     room.localStream.getTracks().forEach(t => pc.addTrack(t, room.localStream));
-    pc.qLevel = startProfileIndex(Live.room.viewers || 0, Live.room.mode || 'camera');
+    pc.qLevel = startProfileIndex(room.viewers || 0, room.mode || 'camera');
     pc.qLimited = 0;
     pc.qPrev = null;
-    applyLiveQuality(pc, Live.room.viewers || 0, pc.qLevel);
     pc.qTimer = setInterval(() => monitorLivePc(pc), 2000);
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: viewerId, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === 'connected') { clearTimeout(pc.downTimer); pc.downTimer = null; pc.retried = false; return; }
-      if (st === 'closed') { clearInterval(pc.qTimer); delete Live.room.pcs[viewerId]; return; }
+      if (st === 'closed') {
+        clearInterval(pc.qTimer);
+        if (Live.room) delete Live.room.pcs[viewerId];
+        return;
+      }
       if (st === 'failed' || st === 'disconnected') {
         if (pc.downTimer) return;
         pc.downTimer = setTimeout(() => {
           pc.downTimer = null;
           if (pc.connectionState === 'connected') return;
-          if (!pc.retried) {                       // первая попытка — пересобираем ICE
+          if (!pc.retried) {                       // первая попытка — настоящий ICE-restart
             pc.retried = true;
-            try { pc.restartIce(); } catch (e) { }
+            try {
+              pc.restartIce();
+              if (pc.signalingState === 'stable') {
+                pc.createOffer({ iceRestart: true })
+                  .then(o => pc.setLocalDescription(o))
+                  .then(() => liveSend({ type: 'live-offer', sid, to: viewerId, sdp: pc.localDescription }))
+                  .catch(() => { });
+              }
+            } catch (e) { }
             return;
           }
           clearInterval(pc.qTimer);
           try { pc.close(); } catch (e) { }        // не помогло — убираем мёртвого зрителя
-          delete Live.room.pcs[viewerId];
+          if (Live.room) delete Live.room.pcs[viewerId];
         }, st === 'failed' ? 1500 : 6000);
       }
     };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    // битрейт применяем после SDP: до этого Chrome часто игнорирует setParameters
+    applyLiveQuality(pc, room.viewers || 0, pc.qLevel);
     liveSend({ type: 'live-offer', sid, to: viewerId, sdp: pc.localDescription });
   }
 
@@ -690,23 +730,22 @@ async function renderRoom(screen, sid) {
     };
     pc.onicecandidate = e => { if (e.candidate) liveSend({ type: 'live-ice', sid, to: info.user.id, cand: e.candidate }); };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') {
-        pc.restartIce && pc.restartIce();
-      }
+      if (pc.connectionState === 'failed') pc.iceFailed = true;
+      else if (pc.connectionState === 'connected') pc.iceFailed = false;
     };
     // зритель ничего не отправляет, но добавляем recvonly-трансиверы
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
     // буфер воспроизведения: на мобильной сети без него картинка рвётся
-    const jitter = IS_MOBILE ? 400 : 200;
+    const jitter = LIVE_JITTER_MS;
     pc.getReceivers().forEach(r => {
       try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
     });
     liveSend({ type: 'live-join', sid });
   }
 
-  // Если кадры не пошли (например, сервер перезапустился во время эфира),
-  // переподключаемся сами, а не просим пользователя обновлять страницу.
+  // Если кадры не пошли — быстро переподключаемся сами. Не рвём соединение,
+  // пока идёт ICE/сигналинг: раньше это отменяло почти установленный эфир.
   let noVideoTicks = 0;
   Live.room.watchdog = setInterval(() => {
     const r = Live.room;
@@ -717,37 +756,50 @@ async function renderRoom(screen, sid) {
       return;
     }
     if (!App.ws || App.ws.readyState !== 1) return;
-    noVideoTicks++;
     wait.hidden = false;
+    const pc = r.remotePc;
+    const connecting = pc && (pc.signalingState !== 'stable'
+      || pc.iceConnectionState === 'checking' || pc.iceConnectionState === 'new');
+    if (connecting) {
+      wait.textContent = 'Подключаемся к эфиру…';
+      noVideoTicks = 0;
+      return;
+    }
+    noVideoTicks++;
     wait.textContent = noVideoTicks > 1 ? 'Переподключаемся через реле…' : 'Подключаемся к эфиру…';
     if (noVideoTicks >= 2) {
       noVideoTicks = 0;
-      if (r.remotePc) { try { r.remotePc.close(); } catch (e) { } }
+      if (pc) { try { pc.close(); } catch (e) { } }
       r.remotePc = null;
       setupViewer(true);
     }
-  }, 8000);
+  }, 4000);
 
   // события сервера — через LiveRoom.onEvent
   Live.room.onOffer = async (from, sdp) => {
-    const pc = Live.room.remotePc;
-    if (!pc) return;
-    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    const jitter = IS_MOBILE ? 400 : 200;
-    pc.getReceivers().forEach(r => {
-      try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
-    });
-    await flushLiveIce(pc);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    liveSend({ type: 'live-answer', sid, to: from, sdp: pc.localDescription });
+    const pc = Live.room && Live.room.remotePc;
+    // старый offer от уже закрытого PC игнорируем — иначе answer не уйдёт и зритель зависнет
+    if (!pc || pc.signalingState !== 'stable') return;
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const jitter = LIVE_JITTER_MS;
+      pc.getReceivers().forEach(r => {
+        try { if ('jitterBufferTarget' in r) r.jitterBufferTarget = jitter; } catch (e) { }
+      });
+      await flushLiveIce(pc);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      liveSend({ type: 'live-answer', sid, to: from, sdp: pc.localDescription });
+    } catch (e) { }
   };
   Live.room.onAnswer = async (from, sdp) => {
-    const pc = Live.room.pcs[from];
-    if (pc) {
+    const r = Live.room;
+    const pc = r && r.pcs[from];
+    if (!pc || pc.signalingState !== 'have-local-offer') return;
+    try {
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       await flushLiveIce(pc);
-    }
+    } catch (e) { }
   };
   Live.room.onIce = async (from, cand) => {
     const pc = Live.room.pcs[from] || Live.room.remotePc;
