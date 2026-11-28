@@ -120,7 +120,12 @@ async function api(path, opts = {}) {
   }
   let res;
   try { res = await fetch(path, o); }
-  catch (e) { toast('Нет связи с сервером'); throw e; }
+  catch (e) {
+    // плохая сеть: тихо пробуем ещё раз, без пугающего уведомления
+    if ((o.method || 'GET') === 'GET') {
+      try { res = await fetch(path, o); } catch (e2) { throw e2; }
+    } else { throw e; }
+  }
   if (res.status === 401 && App.token) { logoutLocal(); throw new Error('401'); }
   let data = null;
   try { data = await res.json(); } catch (e) { }
