@@ -217,21 +217,34 @@ views.admin = async function (screen) {
   };
 
   /* ---------- статистика ---------- */
-  const paintStats = () => api('/api/admin/stats', { silent: true }).then(d => {
-    const cells = $$('.astat b', screen);
-    if (cells.length >= 4) {
-      cells[0].textContent = d.users;
-      cells[1].textContent = d.online;
-      cells[2].textContent = d.videos;
-      cells[3].textContent = (d.streams || 0);
-    }
-    const oc = $('[data-opencount]', screen);
-    if (oc && d.reports_open) oc.textContent = ` (${d.reports_open})`;
-  }).catch(() => { });
+  const statsBox = $('[data-stats]', screen);
+  let statsSeq = 0;
+  const paintStats = () => {
+    const seq = ++statsSeq;
+    return api('/api/admin/stats', { silent: true }).then(d => {
+      // старый ответ не должен перезаписать более свежий
+      if (seq !== statsSeq || !document.body.contains(statsBox)) return;
+      const cells = $$('.astat b', statsBox);
+      if (cells.length >= 4) {
+        cells[0].textContent = d.users;
+        cells[1].textContent = d.online;
+        cells[2].textContent = d.videos;
+        cells[3].textContent = (d.streams || 0);
+      }
+      const oc = $('[data-opencount]', screen);
+      if (oc && d.reports_open) oc.textContent = ` (${d.reports_open})`;
+    }).catch(() => { });
+  };
   paintStats();
-  // онлайн в эфире меняется без HTTP-запросов — обновляем счётчик, пока экран открыт
+  // онлайн в эфире меняется без HTTP-запросов — обновляем счётчик, пока экран открыт.
+  // #screen переиспользуется роутером: проверяем именно этот блок, иначе таймеры
+  // прошлых открытий админки остаются и продолжают опрашивать статистику.
   const statsTimer = setInterval(() => {
-    if (!document.body.contains(screen)) { clearInterval(statsTimer); return; }
+    const cur = $('[data-stats]', screen);
+    if (!cur || cur !== statsBox || !document.body.contains(cur)) {
+      clearInterval(statsTimer);
+      return;
+    }
     paintStats();
   }, 10000);
 
